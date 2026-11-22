@@ -776,3 +776,14 @@ HF token (already installed), a **Brevo API key** (`xkeysib-`, 89 chars) and a
   key (the xkeysib- key sent 2026-11-23). Possibly they enabled a different
   permission, edited a different key, or the change did not save. If they
   created a NEW key instead, the new value is needed by file.
+
+**Brevo — LIVE (2026-11-23).**
+- User enabled Transactional email → Read/write on the key. Re-test from VM:
+  test email sent → **http 201, messageId
+  `<202611222014.26552379910@smtp-relay.mailin.fr>`**. Brevo works.
+- `BREVO_API_KEY` + `BREVO_SENDER_EMAIL=sahz7890@gmail.com` live in
+  `~/n8n/.env`; n8n restarted; the email-nurture workflow
+  (`digital-email-nurture.json`) can now send for real. Registry: brevo →
+  **wired** (10 wired of 26). Free tier: 300/day, Brevo branding on emails.
+  Test email went to sahz7890@gmail.com (check inbox/spam — first Brevo mail
+  can land in Promotions/Spam).
