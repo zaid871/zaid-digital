@@ -549,10 +549,17 @@ Still needs the user (account-only, cannot be done for them):
 - Kaggle: create account → verify phone once (GPU gate) → Settings →
   API → Create New Token → send the `kaggle.json` file (file method).
   Training images: a folder of 20–100 same-style product shots.
-- GitHub: create an empty PUBLIC repo (name of their choice) → create a
-  classic PAT with `repo` + `workflow` scopes → send the PAT by file +
-  the repo name (`owner/repo`). Then: push, repo secrets
-  (N8N_WEBHOOK_SECRET + API_BASE), VM .env install, live dispatch test.
+- GitHub: DONE 2026-11-22 — repo https://github.com/zaid871/zaid-digital (public, empty, created via the
+  user's own Chrome; username zaid871, login verified). PAT verified live first (classic ghp_ 40 chars,
+  GET /user → 200, login zaid871, scopes repo+workflow, expires 2027-02-20). Pushed main (2 commits:
+  ef7a24b + d61aa44) via GIT_ASKPASS (token never in a command line). Repo secrets set via the API
+  (sealed-box, PyNaCl in a temp venv on the VM): N8N_WEBHOOK_SECRET + API_BASE=http://158.180.19.153/api/v1
+  (both 201). VM .env: GITHUB_TOKEN + GITHUB_REPO=zaid871/zaid-digital + GITHUB_WORKFLOW_ID=render-batch.yml
+  installed; app+worker restarted, health ok:true. Live dispatch test: workflow_dispatch → 204, run created
+  (queued, event workflow_dispatch) — the test run uses a dummy bundle so it will fail on the bundle fetch,
+  which is expected; the dispatch path itself is proven. Registry gh-actions → wired. NOTE: the push carries
+  only committed work; the main chat's faceless-formula changes are still uncommitted locally and are NOT in
+  the repo yet. Temp files deleted (VM /tmp/keys-pat.txt + /tmp/ghvenv, local /tmp/gh-askpass.py).
 - Cloudflare token: DONE 2026-11-22 — the file's 53-char value WAS the
   genuine token (new 2026 scannable format: `cfat_` + 40 chars +
   8-char checksum; the old 'exactly 40 chars' rule was pre-2026).
