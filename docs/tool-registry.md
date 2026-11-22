@@ -766,3 +766,13 @@ HF token (already installed), a **Brevo API key** (`xkeysib-`, 89 chars) and a
   IP address 158.180.19.153"** — the VM IP is still not in Brevo Security →
   Authorized IPs. Both fixes (IP allowlist + Transactional scope) are needed
   before any send works.
+
+**Brevo — IP fixed, Transactional scope STILL missing (2026-11-23).**
+- User said "theek kr dye". Re-test from VM: Contacts now returns **200**
+  (2 lists) — the IP allowlist fix WORKED and Contacts permission is live.
+- But the send test STILL returns **403 `permission_denied` for
+  "transactional.email"** — the Transactional email scope is still not on
+  this key. User must enable **Transactional email → Read/write** on THIS
+  key (the xkeysib- key sent 2026-11-23). Possibly they enabled a different
+  permission, edited a different key, or the change did not save. If they
+  created a NEW key instead, the new value is needed by file.
