@@ -668,3 +668,15 @@ Still needs the user (account-only, cannot be done for them):
   run`. The adapter fix (`--payload-json`) is repo-only until the next
   redeploy, so `POST /api/v1/tools/run` dispatch to Modal will not work
   from the live VM until then.
+- **Redeploy 2026-11-22 ~22:40 IST (DOMAIN=zaid-digital.duckdns.org):**
+  carried the adapter fix + the workers COPY into the image. Verified
+  live after: workers baked into the image (`/app/src/lib/tools/workers/`
+  has all three modal workers), registry route 200 with modal wired (9
+  wired of 26, 0 warnings), and a real `POST /api/v1/tools/run` dispatch
+  → ok:true, toolId=modal, output `/outputs/upscaled-1795367260.png`,
+  0.08 gpu-min, 18s. NOTE: dispatch routes by CAPABILITY and returns
+  the first adapter's result — for `gpu-batch` it picks kaggle first, so
+  a Modal-style input sent as gpu-batch pauses on kaggle and never
+  reaches modal; the route test used capability `gpu-video` (only modal
+  offers it) to reach the modal adapter. Wan/Whisper first live runs
+  still pending.
