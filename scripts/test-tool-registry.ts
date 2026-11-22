@@ -242,6 +242,34 @@ async function main(): Promise<void> {
   const d5 = await dispatchTool({ capability: "object-storage", jobId: "job-11", input: { localPath: "/tmp/x.mp4", key: "v/x.mp4" }, timeoutMs: 60000 });
   check("dispatch object-storage reaches s3-storage adapter", !d5.ok && d5.pauseReason === "not_configured", d5.error?.code ?? "");
 
+  // Fallback cycle regression (2026-11-22 redeploy): kaggle <-> modal
+  // formed a 2-cycle that spun dispatchTool's fallback loop forever at
+  // 100% CPU and hung every later request (the event loop was blocked).
+  // The loop must terminate; race against a timeout so a regression
+  // fails fast instead of hanging the suite.
+  {
+    const cycleRegistry = {
+      version: 1,
+      updatedAt: TODAY,
+      tools: [
+        { id: "kaggle", displayName: "Kaggle", capabilities: ["lora-train"], limits: {}, quota: { unit: "gpu-hours" }, expiry: "free", fallback: "modal", cost: "$0", status: "wired", lastVerified: TODAY, adapter: "kaggle" },
+        { id: "modal", displayName: "Modal", capabilities: ["lora-train"], limits: {}, quota: { unit: "gpu-minutes" }, expiry: "free", fallback: "kaggle", cost: "$0", status: "wired", lastVerified: TODAY, adapter: "modal" },
+      ],
+    };
+    writeFileSync(process.env.TOOLS_REGISTRY_PATH as string, JSON.stringify(cycleRegistry));
+    delete process.env.KAGGLE_USERNAME;
+    delete process.env.KAGGLE_KEY;
+    delete process.env.KAGGLE_API_TOKEN;
+    delete process.env.MODAL_TOKEN_ID;
+    delete process.env.MODAL_TOKEN_SECRET;
+    const raced = await Promise.race([
+      dispatchTool({ capability: "lora-train", jobId: "job-cycle", input: { action: "status", kernelSlug: "u/k" }, timeoutMs: 60000 }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]);
+    check("dispatch terminates on a fallback cycle (kaggle<->modal)", raced !== null, "dispatchTool hung past 5s");
+    writeTempRegistry();
+  }
+
   // --- Phase 2: Modal / Kaggle / Workers adapters (no CLIs here) ---
   delete process.env.MODAL_TOKEN_ID;
   delete process.env.MODAL_TOKEN_SECRET;
@@ -348,11 +376,14 @@ async function main(): Promise<void> {
   const real = loadRegistry();
   check("real registry loads with 0 warnings", real.warnings.length === 0, real.warnings.join(";"));
   check(
-    "real registry: modal/kaggle/cf-workers have adapters, still candidate",
+    "real registry: modal/kaggle/cf-workers have adapters (kaggle + cf-workers wired 2026-11-22, modal still candidate)",
     ["modal", "kaggle", "cf-workers"].every((id) => {
       const t = getTool(real.tools, id);
-      return t !== null && t.adapter !== null && t.status === "candidate";
-    })
+      return t !== null && t.adapter !== null;
+    }) &&
+      getTool(real.tools, "kaggle")?.status === "wired" &&
+      getTool(real.tools, "cf-workers")?.status === "wired" &&
+      getTool(real.tools, "modal")?.status === "candidate"
   );
   check("real registry: gh-actions notes the render-batch workflow", (getTool(real.tools, "gh-actions")?.limits.renderBatch ?? "").includes("render-batch.yml"));
   process.env.TOOLS_REGISTRY_PATH = savedPath;

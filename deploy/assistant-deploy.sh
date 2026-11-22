@@ -95,7 +95,8 @@ sync_code() {
   $SSH "mkdir -p $REMOTE_DIR"
   rsync -az --delete \
     --exclude 'node_modules' --exclude '.git' --exclude '.next' \
-    --exclude 'storage' --exclude '.env' --exclude '*.log' \
+    --include 'storage/' --include 'storage/tool-registry.json' --exclude 'storage/*' \
+    --exclude '.env' --exclude '*.log' \
     -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new" \
     "$PROJECT_DIR"/ "${SSH_USER}@${VM_IP}:${REMOTE_DIR}/"
 }
@@ -178,7 +179,7 @@ migrate() {
 
 verify() {
   echo "==> verifying"
-  $SSH "cd $REMOTE_DIR && docker compose exec worker ls -l /usr/share/fonts/TTF/DejaVuSans.ttf"
+  $SSH "cd $REMOTE_DIR && docker compose exec worker ls -l /usr/share/fonts/dejavu/DejaVuSans.ttf"
   sleep 3
   local scheme="https"
   [[ "$DOMAIN" == "$VM_IP" ]] && scheme="http"

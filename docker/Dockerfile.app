@@ -50,7 +50,10 @@ RUN addgroup -S app && adduser -S app -G app
 # removed in pypdf 7.0.0 — an unpinned install breaks buyer-stamping at
 # deploy (caught 2026-11-11 while verifying the full test suite).
 RUN apk add --no-cache python3 py3-pip ffmpeg zip fontconfig font-dejavu \
-  && pip3 install --no-cache-dir --break-system-packages fpdf2 "pypdf==6.21.4" pytrends python-docx python-pptx EbookLib openpyxl kaggle modal
+  && pip3 install --no-cache-dir --break-system-packages fpdf2 "pypdf==6.21.4" pytrends python-docx python-pptx EbookLib openpyxl kaggle modal six
+# six is a kaggle 2.2.5 runtime import (kaggle/models/upload_file.py) that the
+# kaggle package does not declare — without it `kaggle --version` dies with
+# ModuleNotFoundError (caught 2026-11-22 on the first redeploy).
 
 # Cloudflare Wrangler CLI (2026-11-22): the cf-workers adapter shells
 # out to `wrangler deploy` from this container. Global install so it is
@@ -77,6 +80,11 @@ COPY --from=builder /app/next.config.* ./
 COPY --from=builder /app/prisma.config.ts ./
 COPY --from=builder /app/scripts/pdf_bridge.py ./scripts/pdf_bridge.py
 COPY --from=builder /app/scripts/docs_bridge.py ./scripts/docs_bridge.py
+# Tool Registry data file (config, not runtime state): the tools/registry
+# and tools/run routes read it from storage/tool-registry.json. It is
+# NOT copied by the other COPYs above, so it needs its own line — without
+# it the routes serve an empty registry (caught 2026-11-22 redeploy).
+COPY --from=builder /app/storage/tool-registry.json ./storage/tool-registry.json
 
 # Writable asset + temp dirs owned by the app user.
 # Everything under /app must belong to `app`: the image runs as USER app,

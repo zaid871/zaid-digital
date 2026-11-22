@@ -593,3 +593,15 @@ Still needs the user (account-only, cannot be done for them):
   were never affected (its verification GET succeeded during subscribe). Registry cf-workers → wired.
   Real comment events now flow to the worker and are forwarded to n8n — n8n 404s them until the auto-DM
   workflow is activated (needs the IG Tester invites + user's go-ahead), so no DMs are sent yet.
+
+## Redeploy 2026-11-22 (user: "redeploy kar do")
+
+- Deploy script `deploy/assistant-deploy.sh update` (rsync working tree → VM, rebuild app+worker, `prisma migrate deploy`, restart, verify). First attempt failed on an npm-registry timeout in the worker `npm ci` (ETIMEDOUT after 134s); the VM network was fine (npm registry 200 in 0.04s right after) — a transient timeout; retry succeeded.
+- What went live: Tool Registry Phase 1+2 routes (`/api/v1/tools/registry` + `/api/v1/tools/run`), render-bundle route, faceless-formula (bundle input + per-type DM + migration `20261122200000_faceless_bundle`), store improvements, Kadnar/Saqlain ebook styles, accounts routing, IG eligibility-check fix, Utkarsh validation, Tech+Gadgets discovery filter. Health ok:true (database ok, redis ok, n8n configured).
+- Three bugs found + fixed during this redeploy (all committed):
+  1. **Fallback cycle hang (critical):** registry fallback links kaggle → modal → kaggle form a 2-cycle (groq ↔ gemini too). `dispatchTool`'s fallback loop had no cycle guard, so the first valid `tools/run` dispatch spun the Node event loop at 100% CPU forever and hung every later request. Fixed with a visited-set guard in `dispatch.ts`; regression test added (49 tests). Verified live: kaggle status dispatch returns in ~1s, email dispatch returns instantly.
+  2. **Registry file never reached the container:** rsync excluded `storage/`, and the runner image never copied `storage/tool-registry.json` — the routes served an empty registry. Fixed: deploy script rsync now includes `storage/tool-registry.json`; Dockerfile.app runner copies it from the builder; file is 644 (the app runs as uid 100 and could not read the docker-cp'd 660 file). Registry route now returns 26 tools, 8 wired, 0 warnings.
+  3. **Kaggle CLI broken in the image:** kaggle 2.2.5 imports `six` but does not declare it (`ModuleNotFoundError`). Fixed: `six` added to the Dockerfile.app pip line (and installed in the running container for the interim). `kaggle --version` → 2.2.5.
+- Deploy script's verify step had a stale font path (`/usr/share/fonts/TTF/DejaVuSans.ttf`); the real path is `/usr/share/fonts/dejavu/DejaVuSans.ttf` (per Dockerfile.worker CAPTION_FONT). Fixed; verify now passes and the script prints `==> DONE.`
+- The kernel pushed earlier (zaiddigital7/toolbox-lora-train) now reports status ERROR — expected, it has no training data. Real LoRA training still needs the images folder.
+- NOTE: the redeploy synced the working tree INCLUDING the main chat's uncommitted faceless-formula changes (the deploy script rsyncs the working tree as-is), so faceless-formula is live. Those changes are still uncommitted in git; the main chat owns committing them so the repo matches what's live.

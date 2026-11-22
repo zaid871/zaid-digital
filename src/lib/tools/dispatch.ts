@@ -109,10 +109,17 @@ export async function dispatchTool(
   };
   for (const entry of routableTools(tools, input.capability)) push(entry);
   // Follow explicit fallback links from the first routable tool.
+  // Cycle guard: fallback links can form a cycle (kaggle <-> modal,
+  // groq <-> gemini) and without it this loop spins the event loop at
+  // 100% CPU forever — every later request hangs. A visited set ends
+  // the chain the moment a target repeats (caught 2026-11-22 redeploy).
   let cursor = attempts[0] ?? null;
+  const seenFallbacks = new Set<string>();
   while (cursor?.fallback) {
     const next = getTool(tools, cursor.fallback);
     if (!next) break;
+    if (seenFallbacks.has(next.id)) break;
+    seenFallbacks.add(next.id);
     if (routableTools(tools, input.capability).some((t) => t.id === next.id)) {
       push(next);
     }
