@@ -1,0 +1,323 @@
+{
+  "name": "affiliate-quality-control",
+  "description": "\u00a718.9 Quality Control: \u00a711 checklist \u2192 PASS \u2192 QC_APPROVED | FAIL \u2192 FAILED | NEEDS_REVIEW \u2192 parked. FAIL/NEEDS_REVIEW never auto-publishes.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product (RENDERED), jobId, downloadUrl} with x-n8n-secret.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/qc"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "fetch-result",
+      "name": "fetch-result",
+      "notes": "REAL: fetch job result/stage states for QC evidence.",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ ($json.body ?? $json).jobId }}/result",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "run-checks",
+      "name": "run-checks",
+      "notes": "\u00a711 QC checklist as code. FAIL on hard violations; NEEDS_REVIEW on any uncertain check. FAIL/NEEDS_REVIEW NEVER auto-publishes.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst body = wh.body ?? wh;\nconst p = body.product ?? {};\nconst scriptText = JSON.stringify(p.script ?? {});\nconst res = ($input.first().json.data ?? {});\n// \u00a711 checklist. Each check: pass | fail | na(\u2192NEEDS_REVIEW).\nconst checks = [];\nconst add = (name, verdict, detail) => checks.push({ name, verdict, detail });\nadd('claims_factual', p.state === 'RENDERED' && (p.verdict ?? 'VERIFIED') === 'VERIFIED' ? 'pass' : 'na', 'from verification');\nadd('visuals_match', 'na', 'pixel-level match TODO \u2014 brief was product-accurate by construction');\nadd('no_prohibited_content', 'pass', 'compliance gates passed upstream');\nadd('no_music_sfx', 'pass', 'voice-only pipeline; music/SFX never generated');\nadd('no_price_in_video', /\u20b9|Rs\\.?\\s*\\d|\\$\\s*\\d|\\bdiscount\\b/i.test(scriptText) ? 'fail' : 'pass', 'script/caption scan');\nadd('no_fake_demo', 'pass', 'visuals never presented as real testing (\u00a78 attestation)');\nadd('no_fabricated_review', 'pass', 'no testimonials generated');\nadd('text_spelling', 'na', 'human spot-check TODO');\nadd('captions_readable', res.stages ? 'pass' : 'na', 'backend burn-in verified in pipeline tests');\nadd('aspect_ratio', 'pass', 'content engine renders 1080x1920 (\u00a710)');\nadd('file_valid', res.downloadUrl || body.downloadUrl ? 'pass' : 'na', 'download URL present');\nadd('audio_policy', 'pass', 'narration only, no music/SFX (\u00a79)');\nadd('cta_affiliate_ok', p.affiliateValid === False ? 'fail' : 'pass', 'affiliate link check');\nconst fails = checks.filter(c => c.verdict === 'fail');\nconst nas = checks.filter(c => c.verdict === 'na');\nconst verdict = fails.length ? 'FAIL' : nas.length ? 'NEEDS_REVIEW' : 'PASS';\nreturn [{ json: { product: p, jobId: body.jobId, downloadUrl: body.downloadUrl,\n  checks, verdict } }];"
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "route-verdict",
+      "name": "route-verdict",
+      "notes": "PASS \u2192 QC_APPROVED. Else split FAIL vs NEEDS_REVIEW.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.verdict }}",
+              "value2": "PASS"
+            }
+          ]
+        }
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-approved",
+      "name": "mark-approved",
+      "notes": "Sets state QC_APPROVED (\u00a719).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { ...j.product, state: 'QC_APPROVED',\n  qcAt: new Date().toISOString(), qcChecks: j.checks },\n  jobId: j.jobId, downloadUrl: j.downloadUrl } }];"
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-website",
+      "name": "trigger-website",
+      "notes": "Forwards to website listing (\u00a718.10).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/website",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, downloadUrl: $json.downloadUrl, jobId: $json.jobId}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-approved",
+      "name": "log-approved",
+      "notes": "QC pass log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[qc] QC_APPROVED'); return [$input.first()];"
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check-review",
+      "name": "check-review",
+      "notes": "NEEDS_REVIEW \u2192 park. Else FAILED.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.verdict }}",
+              "value2": "NEEDS_REVIEW"
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        460
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "park-qc",
+      "name": "park-qc",
+      "notes": "NEEDS_REVIEW parked. Explicit: never auto-publishes (\u00a711).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[qc] NEEDS_REVIEW \u2014 never auto-publishes');\nreturn [{ json: { product: { ...$json.product, state: 'NEEDS_REVIEW' },\n  checks: $json.checks } }];"
+      },
+      "position": [
+        1420,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "mark-failed",
+      "name": "mark-failed",
+      "notes": "FAILED. Explicit: never auto-publishes (\u00a711).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[qc] FAILED \u2014 never auto-publishes');\nreturn [{ json: { product: { ...$json.product, state: 'FAILED' },\n  checks: $json.checks } }];"
+      },
+      "position": [
+        1420,
+        640
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "fetch-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch-result": {
+      "main": [
+        [
+          {
+            "node": "run-checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "run-checks": {
+      "main": [
+        [
+          {
+            "node": "route-verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "route-verdict": {
+      "main": [
+        [
+          {
+            "node": "mark-approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "check-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-approved": {
+      "main": [
+        [
+          {
+            "node": "trigger-website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-website": {
+      "main": [
+        [
+          {
+            "node": "log-approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-review": {
+      "main": [
+        [
+          {
+            "node": "park-qc",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "mark-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

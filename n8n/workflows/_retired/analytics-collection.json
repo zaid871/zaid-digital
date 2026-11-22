@@ -1,0 +1,169 @@
+{
+  "name": "affiliate-analytics-collection",
+  "description": "§18.13 Analytics Collection: per-platform insights (IG/FB Graph API) → record with ACTUAL data only (§16). Missing metrics → null, never invented.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {productId, platform: 'instagram'|'facebook', mediaId} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/analytics"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (§21).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "route-platform",
+      "name": "route-platform",
+      "notes": "Routes to the per-platform insights endpoint. NOTE: uses process.env because $env is not available inside Code nodes — tokens stay in env, never hardcoded.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst b = wh.body ?? wh;\nconst platform = b.platform;\nlet url = '';\nif (platform === 'instagram')\n  url = `https://graph.facebook.com/v21.0/${b.mediaId}/insights?metric=reach,likes,comments,shares,saved,video_views&access_token=${process.env.IG_ACCESS_TOKEN ?? ''}`;\nelse if (platform === 'facebook')\n  url = `https://graph.facebook.com/v21.0/${b.mediaId}/insights?metric=post_impressions,post_engaged_users&access_token=${process.env.FB_PAGE_TOKEN ?? ''}`;\nelse throw new Error('unknown platform: ' + platform);\nreturn [{ json: { productId: b.productId, platform, mediaId: b.mediaId, url } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "fetch-insights",
+      "name": "fetch-insights",
+      "notes": "Fetches real platform metrics (§16: actual data only).",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "build-record",
+      "name": "build-record",
+      "notes": "Builds the analytics record (§19): actual data only, missing metrics → null, never invented. Sets state ANALYZED. Persistence TODO (no analytics endpoint yet).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst raw = $input.first().json; // http item\nconst metrics = {};\nfor (const d of (raw.data ?? [])) {\n  const v = (d.values ?? [])[0]?.value;\n  metrics[d.name] = (typeof v === 'number') ? v : null; // never invent numbers\n}\nreturn [{ json: { productId: j.productId, platform: j.platform, mediaId: j.mediaId,\n  metrics, collectedAt: new Date().toISOString(), state: 'ANALYZED',\n  note: 'metrics are actual platform data only; missing → null (§16)' } }];"
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-analytics",
+      "name": "log-analytics",
+      "notes": "Analytics log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[analytics] collected'); return [$input.first()];"
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "route-platform",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "route-platform": {
+      "main": [
+        [
+          {
+            "node": "fetch-insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch-insights": {
+      "main": [
+        [
+          {
+            "node": "build-record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-record": {
+      "main": [
+        [
+          {
+            "node": "log-analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "IG_ACCESS_TOKEN",
+    "FB_PAGE_TOKEN"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

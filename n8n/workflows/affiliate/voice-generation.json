@@ -1,0 +1,236 @@
+{
+  "name": "affiliate-voice-generation",
+  "description": "\u00a718.7 Voice Generation: narration text from approved script, no prices spoken, music/SFX off (\u00a79). Synthesis is an explicit TODO.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product, script} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/voice"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "prep-narration",
+      "name": "prep-narration",
+      "notes": "Builds narration text from the approved script (\u00a79): narration must match the script, and no price may be spoken.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst body = wh.body ?? wh;\nconst s = body.script ?? {};\nconst narrationText = [s.hook, s.intro, (s.features ?? []).join('. '),\n  s.useCase, s.explanation, s.cta].filter(Boolean).join(' ');\nconst checks = [];\nif (/\u20b9|Rs\\.?\\s*\\d|\\$\\s*\\d|\\bprice\\b|\\bcost\\b/i.test(narrationText))\n  checks.push('price_mentioned_in_narration');\nif (!narrationText || narrationText.length < 20) checks.push('narration_too_short');\nreturn [{ json: { product: body.product ?? {}, script: s,\n  visualBrief: body.visualBrief ?? [], narrationText, checks,\n  clean: checks.length === 0 } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-narration-clean",
+      "name": "if-narration-clean",
+      "notes": "Clean \u2192 narration brief ready. Otherwise park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.clean }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-narration-ready",
+      "name": "mark-narration-ready",
+      "notes": "Narration brief: voice + text, music/SFX explicitly off (\u00a79). Synthesis is an explicit TODO.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: j.product, script: j.script, visualBrief: j.visualBrief,\n  voiceBrief: { voice: 'hi-IN-SwaraNeural', narrationText: j.narrationText,\n    music: False, sfx: False },\n  todo: 'SYNTHESIS TODO: Edge TTS hi-IN-SwaraNeural (unreachable from some networks \u2014 see runbook)' } }];"
+      },
+      "position": [
+        980,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-render",
+      "name": "trigger-render",
+      "notes": "Forwards to video rendering (\u00a718.8).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/render",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, script: $json.script, visualBrief: $json.visualBrief, voiceBrief: $json.voiceBrief}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-voice",
+      "name": "log-voice",
+      "notes": "Voice log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[voice] narration-ready'); return [$input.first()];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-voice",
+      "name": "park-voice",
+      "notes": "Narration check failure \u2192 NEEDS_REVIEW.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { ...$json.product, state: 'NEEDS_REVIEW' },\n  reason: 'narration_check_failed', checks: $json.checks } }];"
+      },
+      "position": [
+        980,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "prep-narration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prep-narration": {
+      "main": [
+        [
+          {
+            "node": "if-narration-clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-narration-clean": {
+      "main": [
+        [
+          {
+            "node": "mark-narration-ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-narration-ready": {
+      "main": [
+        [
+          {
+            "node": "trigger-render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-render": {
+      "main": [
+        [
+          {
+            "node": "log-voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

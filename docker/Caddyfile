@@ -1,0 +1,72 @@
+# Caddy reverse proxy — automatic HTTPS via Let's Encrypt.
+# Set DOMAIN (and optionally ACME_EMAIL) in your .env.
+#
+#   {$DOMAIN}            → the Next.js app (dashboard + API)
+#   n8n.{$DOMAIN}       → the n8n editor, HTTP basic-auth protected
+#
+# PRE-DNS MODE (current): DOMAIN is the server IP (158.180.19.153), so the
+# app site is served as plain HTTP on port 80 — Let's Encrypt cannot issue
+# a certificate for a bare IP, and the `tls` directive made Caddy redirect
+# http → https and then answer nothing (ACME "cannot have public IP
+# certificate" errors, retried forever). With a real domain, change the
+# site block back to `{$DOMAIN} {` + `tls {$ACME_EMAIL}`.
+#
+# The n8n block is DISABLED in pre-DNS mode: n8n.158.180.19.153 does not
+# resolve, and its upstream `n8n:5678` is the compose service that is never
+# started (standalone n8n is the only n8n). When a real domain exists,
+# re-enable it AND point the upstream at the standalone n8n host
+# (e.g. reverse_proxy 10.0.0.196:5678).
+
+{
+	# Don't send Caddy version headers
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+http://{$DOMAIN} {
+	# Security headers on every response
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# HSTS only makes sense once HTTPS is confirmed working
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	# n8n webhooks ONLY (no editor, no API): Meta calls the Cloudflare
+	# Worker, the Worker HMAC-verifies the event and forwards it here.
+	# Path-scoped so nothing else on n8n is exposed. Upstream is the
+	# standalone n8n on the host's private IP (10.0.0.196:5678) — the
+	# compose `n8n` service is never started. Added 2026-11-22 for the
+	# Tool Registry webhook-ingress Worker (VM_WEBHOOK_URL in
+	# src/lib/tools/workers/webhook-ingress/wrangler.toml).
+	handle /webhook/* {
+		reverse_proxy 10.0.0.196:5678
+	}
+
+	# Long timeouts: video renders and downloads can take minutes
+	reverse_proxy app:3000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# n8n editor on a subdomain, locked behind basic auth.
+# Credentials come from N8N_BASIC_AUTH_USER / N8N_BASIC_AUTH_PASSWORD in .env
+# (Caddy reads the pre-hashed value N8N_BASIC_AUTH_HASH).
+# DISABLED in pre-DNS mode — see header comment.
+# n8n.{$DOMAIN} {
+# 	tls {$ACME_EMAIL}
+#
+# 	basic_auth {
+# 		{$N8N_BASIC_AUTH_USER} {$N8N_BASIC_AUTH_HASH}
+# 	}
+#
+# 	reverse_proxy n8n:5678
+# }
+
+# Generate the hash once with:
+#   docker run --rm caddy:2-alpine caddy hash-password
+# then put the output in N8N_BASIC_AUTH_HASH (keep the $2a$… value quoted in .env).

@@ -1,0 +1,268 @@
+{
+  "name": "digital: pod-approve",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Human approval: {slug} of a design generated with skipPrintify.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-pod-approve"
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst slug = String(body.slug ?? '').trim().toLowerCase();\nif (!/^[a-z0-9-]{1,120}$/.test(slug)) return [{ json: { valid: false, error: 'slug zaroori hai (a-z, 0-9, hyphen)' } }];\nconst payload = { slug };\nif (body.printify !== undefined) payload.printify = body.printify;\nreturn [{ json: { valid: true, payload } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        420
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "call-api",
+      "name": "call-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "notes": "Creates the Printify UNPUBLISHED draft for the approved design.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/pod/publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "normalize-result",
+      "name": "normalize-result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nif (r && r.ok === true && r.data) {\n  const d = r.data;\n  return [{ json: { ok: true, type: 'pod-publish', slug: d.slug ?? '',\n    productId: d.productId ?? '', status: d.status ?? '',\n    note: d.note ?? '' } }];\n}\nreturn [{ json: { ok: false, type: 'pod-publish',\n  error: (r && (r.message ?? r.error)) || 'POD publish failed',\n  code: (r && r.code) || 'publish_failed' } }];\n"
+      }
+    },
+    {
+      "id": "check-ok",
+      "name": "check-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-success",
+      "name": "respond-success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        240
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "respond-failed",
+      "name": "respond-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        360
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-api": {
+      "main": [
+        [
+          {
+            "node": "normalize-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-result": {
+      "main": [
+        [
+          {
+            "node": "check-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-ok": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Lever 2 (design-check): human ne design-print.png check kar liya -> {slug} bhejo -> Printify UNPUBLISHED draft banta hai. Pairs with digital-pod-generation (skipPrintify:true).",
+  "errorWorkflow": "digital-error-recovery"
+}

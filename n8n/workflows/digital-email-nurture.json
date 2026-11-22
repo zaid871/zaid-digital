@@ -1,0 +1,350 @@
+{
+  "name": "digital: email-nurture",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Freebie download event \u2192 3-email nurture \u2192 pitch. Brevo free 300/day.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-nurture"
+      },
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "validate",
+      "name": "validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst email = String(body.email ?? '').trim();\nif (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email))\n  return [{ json: { valid: false, error: 'valid email zaroori hai' } }];\nreturn [{ json: { valid: true, email,\n  name: String(body.name ?? '').slice(0, 60),\n  productName: String(body.productName ?? 'hamara product').slice(0, 80),\n  freebieName: String(body.freebieName ?? 'free guide').slice(0, 80),\n  freebieUrl: String(body.freebieUrl ?? '').slice(0, 300) } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        460
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "brevo-contact",
+      "name": "brevo-contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "notes": "Create/update Brevo contact.",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/contacts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.BREVO_API_KEY }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput",
+        "jsonBody": "={\"email\":\"={{ $json.email }}\",\"attributes\":{\"FIRSTNAME\":\"={{ $json.name }}\"}}"
+      }
+    },
+    {
+      "id": "email-1-freebie",
+      "name": "email-1-freebie",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendBody": true,
+        "specifyBody": "json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.BREVO_API_KEY }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput",
+        "jsonBody": "={\"sender\":{\"email\":\"={{ $env.BREVO_SENDER_EMAIL }}\",\"name\":\"={{ $env.BREVO_SENDER_NAME }}\"},\"to\":[{\"email\":\"={{ $json.email }}\"}],\"subject\":\"Tumhara free {{ $json.freebieName }} taiyaar hai\",\"htmlContent\":\"Namaste {{ $json.name }},<br><br>Tumhara free <b>{{ $json.freebieName }}</b> yahan download karo:<br><a href=\\\"{{ $json.freebieUrl }}\\\">Download karo</a><br><br>Kal bataunga ise best kaise use karna hai.\"}"
+      }
+    },
+    {
+      "id": "wait-1d",
+      "name": "wait-1d",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "amount": 1,
+        "unit": "days"
+      }
+    },
+    {
+      "id": "email-2-howto",
+      "name": "email-2-howto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendBody": true,
+        "specifyBody": "json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.BREVO_API_KEY }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput",
+        "jsonBody": "={\"sender\":{\"email\":\"={{ $env.BREVO_SENDER_EMAIL }}\",\"name\":\"={{ $env.BREVO_SENDER_NAME }}\"},\"to\":[{\"email\":\"={{ $json.email }}\"}],\"subject\":\"{{ $json.freebieName }} se 3x fayda kaise uthao\",\"htmlContent\":\"Namaste {{ $json.name }},<br><br>Free guide use karne ke 3 practical tips:<br>1. Pehle ...<br>2. Phir ...<br>3. Roz 10 minute.<br><br>(Apne product ke hisaab se edit karo.)\"}"
+      }
+    },
+    {
+      "id": "wait-2d",
+      "name": "wait-2d",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        300
+      ],
+      "parameters": {
+        "amount": 2,
+        "unit": "days"
+      }
+    },
+    {
+      "id": "email-3-pitch",
+      "name": "email-3-pitch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        300
+      ],
+      "notes": "Pitch \u2014 NO fake urgency, NO fake discount.",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendBody": true,
+        "specifyBody": "json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.BREVO_API_KEY }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput",
+        "jsonBody": "={\"sender\":{\"email\":\"={{ $env.BREVO_SENDER_EMAIL }}\",\"name\":\"={{ $env.BREVO_SENDER_NAME }}\"},\"to\":[{\"email\":\"={{ $json.email }}\"}],\"subject\":\"Agar free wala pasand aaya to...\",\"htmlContent\":\"Namaste {{ $json.name }},<br><br>Agar free guide kaam aayi to <b>{{ $json.productName }}</b> dekho \u2014 wahi system, poora aur detailed.<br><br>Koi fake urgency nahi \u2014 jab ready ho tab.\"}"
+      }
+    },
+    {
+      "id": "respond-done",
+      "name": "respond-done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "brevo-contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "brevo-contact": {
+      "main": [
+        [
+          {
+            "node": "email-1-freebie",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email-1-freebie": {
+      "main": [
+        [
+          {
+            "node": "wait-1d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-1d": {
+      "main": [
+        [
+          {
+            "node": "email-2-howto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email-2-howto": {
+      "main": [
+        [
+          {
+            "node": "wait-2d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-2d": {
+      "main": [
+        [
+          {
+            "node": "email-3-pitch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email-3-pitch": {
+      "main": [
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Freebie \u2192 3-email nurture \u2192 pitch (Brevo free 300/day). No fake urgency.",
+  "errorWorkflow": "digital-error-recovery"
+}

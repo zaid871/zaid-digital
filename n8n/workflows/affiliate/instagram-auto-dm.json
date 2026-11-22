@@ -1,0 +1,332 @@
+{
+  "name": "affiliate: instagram-auto-dm",
+  "nodes": [
+    {
+      "id": "webhook-verify",
+      "name": "webhook-verify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        100
+      ],
+      "notes": "Meta verification handshake (GET, one-time at setup).",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "affiliate/ig-comments"
+      },
+      "webhookId": "469a8880-3d03-5082-8bcd-964926fd7c72"
+    },
+    {
+      "id": "verify-challenge",
+      "name": "verify-challenge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        100
+      ],
+      "notes": "Echo hub.challenge only when hub.verify_token matches META_VERIFY_TOKEN.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Meta webhook verification handshake (GET). Meta calls once at setup with\n// ?hub.mode=subscribe&hub.verify_token=...&hub.challenge=... \u2014 we echo the\n// challenge only when the token matches META_VERIFY_TOKEN.\nconst q = $json.query ?? {};\nconst mode = q['hub.mode'];\nconst token = q['hub.verify_token'];\nconst challenge = q['hub.challenge'];\nconst expected = $env.META_VERIFY_TOKEN;\nif (!expected) throw new Error('META_VERIFY_TOKEN is not set on this n8n instance.');\nif (mode === 'subscribe' && token === expected && challenge) {\n  return [{ challenge: String(challenge) }];\n}\nthrow new Error('Webhook verification failed (hub.mode / hub.verify_token mismatch).');\n"
+      }
+    },
+    {
+      "id": "respond-challenge",
+      "name": "respond-challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        100
+      ],
+      "notes": "Returns the challenge text with HTTP 200.",
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.challenge }}"
+      }
+    },
+    {
+      "id": "webhook-events",
+      "name": "webhook-events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "notes": "Meta comment webhook (POST). Subscribe the 'comments' field in the Meta app dashboard.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/ig-comments"
+      },
+      "webhookId": "b4c9ce5f-b1bf-5e5d-a074-7cce735ba21c"
+    },
+    {
+      "id": "extract-comments",
+      "name": "extract-comments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        400
+      ],
+      "notes": "Top-level comments only; skips replies and the account's own comments.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pull top-level comments out of the Meta webhook payload.\n// Skips: non-comment fields, replies (parent_id), empty text, and the\n// account's own comments (from.id === entry.id) so we never DM ourselves.\nconst body = $json.body ?? $json;\nconst entries = Array.isArray(body.entry) ? body.entry : [];\nconst out = [];\nfor (const entry of entries) {\n  const accountId = String(entry.id ?? '');\n  const changes = Array.isArray(entry.changes) ? entry.changes : [];\n  for (const ch of changes) {\n    if (ch.field !== 'comments') continue;\n    const v = ch.value ?? {};\n    if (!v.id || !v.text) continue;\n    if (v.parent_id) continue;\n    const fromId = String(v.from?.id ?? '');\n    if (fromId && accountId && fromId === accountId) continue;\n    out.push({\n      commentId: String(v.id),\n      text: String(v.text),\n      username: String(v.from?.username ?? 'dost'),\n      mediaId: String(v.media?.id ?? ''),\n      commentedAt: v.timestamp ?? null,\n    });\n  }\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "keyword-match",
+      "name": "keyword-match",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        400
+      ],
+      "notes": "Word-boundary keyword match (DM_KEYWORDS, default LINK).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Keyword match with word boundaries, case-insensitive.\n// DM_KEYWORDS=\"LINK,link bhej\" -> matches \"LINK\" but not \"BLINK\".\nconst rawKws = ($env.DM_KEYWORDS || 'LINK').split(',').map((s) => s.trim()).filter(Boolean);\nconst escapeRe = (s) => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nconst re = new RegExp(`\\\\b(${rawKws.map(escapeRe).join('|')})\\\\b`, 'i');\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const m = String(j.text ?? '').match(re);\n  out.push({ ...j, keyword: m ? m[1].toUpperCase() : null, matched: !!m });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "is-keyword",
+      "name": "is-keyword",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        720,
+        400
+      ],
+      "notes": "Only keyword comments continue to the DM.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.matched }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build-dm",
+      "name": "build-dm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        340
+      ],
+      "notes": "Template + affiliate link + disclosure. Price-gated: violations never send.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Compose the DM: template + resolved link (+ disclosure for affiliate).\n// Two lanes on the ONE webhook (Meta allows a single callback URL per\n// app, so a separate digital auto-DM workflow could never receive\n// comment events \u2014 the branch lives here):\n//  - DIGITAL lane: mediaId in DM_DIGITAL_LINK_MAP_JSON -> own-product\n//    template (DM_DIGITAL_TEMPLATE), NO affiliate disclosure.\n//  - AFFILIATE lane: mediaId in DM_LINK_MAP_JSON (or DM_DEFAULT_LINK)\n//    -> affiliate template + disclosure.\n// HARD GATES (fail-safe, never send on violation):\n//  1. No link resolvable for this media -> do not send.\n//  2. Price/offer pattern in the final text -> do not send.\n//  3. Over 900 chars -> do not send.\nconst DISCLOSURE = $env.DM_DISCLOSURE\n  || 'Affiliate disclosure: is link se aapko koi extra kharch nahi hota, humein chhota sa commission mil sakta hai.';\nconst affiliateTemplate = $env.DM_REPLY_TEMPLATE\n  || 'Namaste {{username}}! Aapne {{keyword}} comment kiya \\u2014 ye raha product ka link: {{link}}';\nconst digitalTemplate = $env.DM_DIGITAL_TEMPLATE\n  || 'Namaste {{username}}! Aapne {{keyword}} comment kiya \\u2014 ye raha aapke product ka link: {{link}}';\nlet linkMap = {};\ntry { linkMap = JSON.parse($env.DM_LINK_MAP_JSON || '{}'); } catch (e) { linkMap = {}; }\nlet digitalMap = {};\ntry { digitalMap = JSON.parse($env.DM_DIGITAL_LINK_MAP_JSON || '{}'); } catch (e) { digitalMap = {}; }\nconst priceRe = /(\\u20b9|\\brs\\.?\\b|\\brupees?\\b|%\\s?off|\\bdiscount\\b|\\boffer\\b|\\bdeal\\b|\\bprice\\b|\\bcost\\b|\\b\\d[\\d,]*\\s?(\\u20b9|rs|inr)\\b)/i;\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const isDigital = !!digitalMap[j.mediaId];\n  const link = isDigital ? digitalMap[j.mediaId] : (linkMap[j.mediaId] || $env.DM_DEFAULT_LINK || '');\n  if (!link) {\n    out.push({ ...j, send: false, reason: 'no link for this media (set DM_DIGITAL_LINK_MAP_JSON / DM_LINK_MAP_JSON / DM_DEFAULT_LINK)' });\n    continue;\n  }\n  const template = isDigital ? digitalTemplate : affiliateTemplate;\n  let text = template.split('{{username}}').join(j.username)\n    .split('{{keyword}}').join(j.keyword || 'LINK')\n    .split('{{link}}').join(link);\n  if (!isDigital) text = `${text}\\n\\n${DISCLOSURE}`;\n  if (priceRe.test(text)) {\n    out.push({ ...j, send: false, reason: 'price/offer pattern in DM text \u2014 blocked by compliance gate' });\n    continue;\n  }\n  if (text.length > 900) {\n    out.push({ ...j, send: false, reason: 'DM text exceeds 900 chars' });\n    continue;\n  }\n  out.push({ ...j, send: true, dmText: text, link, lane: isDigital ? 'digital' : 'affiliate' });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "should-send",
+      "name": "should-send",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        340
+      ],
+      "notes": "Compliance gate output.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.send }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-private-reply",
+      "name": "send-private-reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        280
+      ],
+      "notes": "Private Replies API: 1 reply per comment, 7-day window, 750/hour/account.",
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/{{ $env.IG_USER_ID }}/messages?access_token={{ $env.IG_ACCESS_TOKEN }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n \"recipient\": {\n  \"comment_id\": \"={{ $json.commentId }}\"\n },\n \"message\": {\n  \"text\": \"={{ $json.dmText }}\"\n }\n}"
+      }
+    },
+    {
+      "id": "log-sent",
+      "name": "log-sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        280
+      ],
+      "notes": "Structured log of sent DMs.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map((i) => i.json);\nfor (const r of rows) {\n  console.log(JSON.stringify({ event: 'auto_dm_sent', commentId: r.commentId, username: r.username, keyword: r.keyword, mediaId: r.mediaId, lane: r.lane ?? 'affiliate', at: new Date().toISOString() }));\n}\nreturn rows.map((r) => ({ commentId: r.commentId, username: r.username, keyword: r.keyword, lane: r.lane ?? 'affiliate', sent: true }));\n"
+      }
+    },
+    {
+      "id": "log-skipped",
+      "name": "log-skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        480
+      ],
+      "notes": "Structured log of skipped comments (no keyword / gate blocked).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map((i) => i.json);\nfor (const r of rows) {\n  console.log(JSON.stringify({ event: 'auto_dm_skipped', commentId: r.commentId ?? null, username: r.username ?? null, reason: r.send === false ? r.reason : 'keyword not matched', at: new Date().toISOString() }));\n}\nreturn rows.map((r) => ({ commentId: r.commentId ?? null, sent: false, reason: r.send === false ? r.reason : 'keyword not matched' }));\n"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-verify": {
+      "main": [
+        [
+          {
+            "node": "verify-challenge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "verify-challenge": {
+      "main": [
+        [
+          {
+            "node": "respond-challenge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "webhook-events": {
+      "main": [
+        [
+          {
+            "node": "extract-comments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "extract-comments": {
+      "main": [
+        [
+          {
+            "node": "keyword-match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "keyword-match": {
+      "main": [
+        [
+          {
+            "node": "is-keyword",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-keyword": {
+      "main": [
+        [
+          {
+            "node": "build-dm",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-dm": {
+      "main": [
+        [
+          {
+            "node": "should-send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "should-send": {
+      "main": [
+        [
+          {
+            "node": "send-private-reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send-private-reply": {
+      "main": [
+        [
+          {
+            "node": "log-sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Comment-to-DM auto-reply (official Meta Private Replies API \u2014 no password bots). SETUP: 1) Meta app dashboard -> Webhooks -> subscribe 'comments' field to https://<n8n-domain>/webhook/affiliate/ig-comments with META_VERIFY_TOKEN. 2) Grant the app instagram_manage_comments + instagram_manage_messages (Facebook Login flow; dev mode is enough for your own account). 3) Set env: META_VERIFY_TOKEN, IG_USER_ID, IG_ACCESS_TOKEN, DM_KEYWORDS (include digital videos' keywords too, e.g. RSVP), DM_REPLY_TEMPLATE, DM_DEFAULT_LINK, DM_LINK_MAP_JSON, DM_DIGITAL_LINK_MAP_JSON, DM_DIGITAL_TEMPLATE. Two lanes: a media in DM_DIGITAL_LINK_MAP_JSON gets the own-product template with NO affiliate disclosure; everything else keeps the affiliate template + disclosure. The DM always ends with the affiliate disclosure on the affiliate lane; price/offer text can never be sent."
+}

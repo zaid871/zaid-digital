@@ -1,0 +1,231 @@
+{
+  "name": "affiliate-daily-controller",
+  "description": "§18.1 Daily Controller: schedule → quota gate → trigger discovery + error sweep via webhooks. Downstream failures never cascade (onError continue).",
+  "nodes": [
+    {
+      "id": "schedule-daily",
+      "name": "schedule-daily",
+      "notes": "Daily trigger 06:00 Asia/Kolkata. NOTE: n8n evaluates cron in the instance timezone — the VM/n8n TZ env must be Asia/Kolkata (spec §2).",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "check-quota",
+      "name": "check-quota",
+      "notes": "Quota/pause gate (§15, §20, §22). Skips the run when DAILY_PAUSED=true. Monthly budget enforcement is TODO until usage accounting is month-scoped.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const today = new Date().toISOString().slice(0, 10);\nconst paused = String($env.DAILY_PAUSED ?? '').toLowerCase() === 'true';\n// Quota gate: skip the day's run when paused or when the monthly video budget\n// is exhausted. Budget accounting is a TODO until a backend usage endpoint\n// exposes per-month job counts (GET /api/v1/usage exists but is not\n// month-scoped for video jobs yet).\nconst monthlyTarget = 50;\nreturn [{ json: { date: today, runToday: !paused, monthlyTarget,\n  reason: paused ? 'DAILY_PAUSED=true' : 'quota ok (budget check TODO)' } }];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "quota-ok",
+      "name": "quota-ok",
+      "notes": "True: run today's pipeline. False: skip quietly and log.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.runToday }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "trigger-discovery",
+      "name": "trigger-discovery",
+      "notes": "Triggers product discovery (§18.2). onError=continue so a discovery failure never cascades into the error sweep (§18: independence).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/discovery",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({triggeredBy: 'daily-controller', date: $json.date}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "trigger-error-sweep",
+      "name": "trigger-error-sweep",
+      "notes": "Triggers the error-recovery sweep (§18.15, §20) for failed jobs. Independent of discovery — runs even if discovery failed.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/error-sweep",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({triggeredBy: 'daily-controller', date: $json.date}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-run",
+      "name": "log-run",
+      "notes": "Structured run log (§19: workflow execution logs).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.log('[daily-controller] run', JSON.stringify({ date: j.date, runToday: j.runToday }));\nreturn [{ json: { ok: true, date: j.date, triggered: ['discovery', 'error-sweep'] } }];"
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-skipped",
+      "name": "log-skipped",
+      "notes": "Logs skipped days (paused or quota) — never silently dropped.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.log('[daily-controller] skipped', JSON.stringify(j));\nreturn [{ json: { ok: true, skipped: True, reason: j.reason } }];"
+      },
+      "position": [
+        760,
+        480
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "schedule-daily": {
+      "main": [
+        [
+          {
+            "node": "check-quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-quota": {
+      "main": [
+        [
+          {
+            "node": "quota-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "quota-ok": {
+      "main": [
+        [
+          {
+            "node": "trigger-discovery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-discovery": {
+      "main": [
+        [
+          {
+            "node": "trigger-error-sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-error-sweep": {
+      "main": [
+        [
+          {
+            "node": "log-run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

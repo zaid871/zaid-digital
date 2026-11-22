@@ -1,0 +1,32 @@
+# Dependencies & build output
+node_modules
+.next
+out
+
+# Env & secrets — NEVER baked into images
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Local dev data
+storage/jobs
+*.mp4
+*.mp3
+*.srt
+*.vtt
+
+# VCS & editor
+.git
+.gitignore
+.vscode
+.idea
+*.log
+.DS_Store
+
+# Docs not needed at runtime (kept out of the image to slim layers)
+# (README/DEPLOY/OPS stay in the repo, just not in the image)
+README.md
+DEPLOY.md
+OPS.md
+PROVIDERS.md

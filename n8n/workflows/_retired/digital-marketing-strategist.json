@@ -1,0 +1,211 @@
+{
+  "name": "digital: marketing-strategist",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Universal brief in, agency-grade plan out. Client field se multi-client.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-strategist"
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst kinds = ['digital_product', 'physical', 'affiliate', 'service'];\nconst bands = ['low', 'mid', 'high'];\nconst breadths = ['broad', 'niche', 'micro'];\nconst goals = ['sales', 'leads'];\nconst errs = [];\nif (!body.productName || String(body.productName).length < 2) errs.push('productName zaroori hai');\nif (!kinds.includes(body.kind)) errs.push('kind: ' + kinds.join('|'));\nif (!bands.includes(body.priceBand)) errs.push('priceBand: ' + bands.join('|'));\nif (!breadths.includes(body.marketBreadth)) errs.push('marketBreadth: ' + breadths.join('|'));\nif (!goals.includes(body.goal)) errs.push('goal: ' + goals.join('|'));\nif (!body.audience || String(body.audience).length < 2) errs.push('audience zaroori hai');\nif (errs.length) return [{ json: { valid: false, error: errs.join('; ') } }];\nreturn [{ json: { valid: true, brief: {\n  productName: body.productName, client: body.client ?? undefined,\n  kind: body.kind, priceBand: body.priceBand, audience: body.audience,\n  marketBreadth: body.marketBreadth, goal: body.goal,\n  assets: body.assets ?? {}, features: body.features ?? [],\n} } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        460
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "plan",
+      "name": "plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/strategist/plan",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.brief }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "format",
+      "name": "format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nconst lines = [`STRATEGY: ${d.productKey}`, `Channel queue: ${(d.channelQueue ?? []).join(' → ')}`];\nfor (const s of (d.stages ?? [])) {\n  lines.push(`\\n[${s.stage.toUpperCase()}] ${s.title} (${s.timing})`);\n  for (const t of (s.tactics ?? []).slice(0, 4)) lines.push(`  • ${t}`);\n}\nif ((d.angles ?? []).length) { lines.push('\\nAngles:'); for (const a of d.angles) lines.push(`  • ${a}`); }\nif ((d.hooks ?? []).length) { lines.push('Hooks:'); for (const h of d.hooks) lines.push(`  • ${h}`); }\nfor (const w of (d.warnings ?? [])) lines.push(`⚠ ${w}`);\nreturn [{ json: { ok: true, productKey: d.productKey, plan: lines.join('\\n') } }];\n"
+      }
+    },
+    {
+      "id": "respond-done",
+      "name": "respond-done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "plan": {
+      "main": [
+        [
+          {
+            "node": "format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "format": {
+      "main": [
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Universal Marketing Strategist — any product, any market, agency-ready.",
+  "errorWorkflow": "digital-error-recovery"
+}

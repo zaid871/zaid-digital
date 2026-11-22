@@ -1,0 +1,647 @@
+{
+  "connections": {
+    "build-failed": {
+      "main": [
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-review": {
+      "main": [
+        [
+          {
+            "node": "respond-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-success": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-timeout": {
+      "main": [
+        [
+          {
+            "node": "respond-timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-created": {
+      "main": [
+        [
+          {
+            "node": "init-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "fail-create",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create-job": {
+      "main": [
+        [
+          {
+            "node": "check-created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fail-create": {
+      "main": [
+        [
+          {
+            "node": "respond-create-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-status": {
+      "main": [
+        [
+          {
+            "node": "normalize-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "init-poll": {
+      "main": [
+        [
+          {
+            "node": "get-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-completed": {
+      "main": [
+        [
+          {
+            "node": "build-success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "is-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-done": {
+      "main": [
+        [
+          {
+            "node": "is-completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "within-limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-review": {
+      "main": [
+        [
+          {
+            "node": "build-review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-status": {
+      "main": [
+        [
+          {
+            "node": "is-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "create-job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-poll": {
+      "main": [
+        [
+          {
+            "node": "get-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "within-limit": {
+      "main": [
+        [
+          {
+            "node": "wait-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "description": "Phase 3 (v2) — orchestration workflow matched to the REAL backend. Flow: webhook entry → validate input (secret + SSRF guard) → POST /api/v1/jobs (backend persists job + 15 stages and enqueues on BullMQ; the worker runs all stages internally) → poll GET /api/v1/jobs/:id until a terminal state → respond with download URL / review notice / failure. n8n owns job lifecycle; the backend worker owns the 15 pipeline stages. Import into n8n; required env: BACKEND_URL, N8N_WEBHOOK_SECRET.",
+  "errorWorkflow": "product-video-errors",
+  "name": "product-video-main",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry point. POST { productUrl, durationSeconds?, language?, voice?, visualStyle?, platform?, idempotencyKey? } with header x-n8n-secret. Auth is verified in validate-input against $env.N8N_WEBHOOK_SECRET (no n8n credential needed).",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "product-video/job"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2
+    },
+    {
+      "id": "validate-input",
+      "name": "validate-input",
+      "notes": "STAGE 1 (url_validation): verify x-n8n-secret, validate productUrl is public http(s) (SSRF guard), apply defaults. Throws → error workflow.",
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst rawUrl = String(body.productUrl ?? '').trim();\nif (!rawUrl) throw new Error('productUrl is required');\nlet u;\ntry { u = new URL(rawUrl); } catch { throw new Error('productUrl must be a valid URL'); }\nif (!['http:', 'https:'].includes(u.protocol)) throw new Error('productUrl must be http(s)');\nconst host = u.hostname.toLowerCase();\nconst blocked = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]' || host.startsWith('10.') || host.startsWith('192.168.') || /^172\\.(1[6-9]|2\\d|3[01])\\./.test(host);\nif (blocked) throw new Error('productUrl host is not allowed');\nconst durationSeconds = Math.min(180, Math.max(15, Number(body.durationSeconds ?? 15) || 15));\nconst language = ['hinglish', 'hindi', 'english'].includes(body.language) ? body.language : 'hinglish';\nconst payload = {\n  productUrl: u.toString(),\n  durationSeconds,\n  language,\n  voice: body.voice ?? 'hi-IN-SwaraNeural',\n  visualStyle: body.visualStyle ?? 'premium_dark'\n};\nif (body.platform) payload.platform = body.platform;\nif (body.idempotencyKey) payload.idempotencyKey = String(body.idempotencyKey);\nreturn [{ json: payload }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        300,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "create-job",
+      "name": "create-job",
+      "notes": "POST /api/v1/jobs — backend validates (incl. SSRF guard), persists Job + 15 JobStage rows, enqueues on BullMQ. Returns { ok, data: { id, ... } }.",
+      "parameters": {
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "method": "POST",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs"
+      },
+      "position": [
+        500,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "check-created",
+      "name": "check-created",
+      "notes": "True: job created → start polling. False: backend rejected → fail fast.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ],
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.data.id }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        700,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "fail-create",
+      "name": "fail-create",
+      "notes": "Builds the job-creation failure payload.",
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nreturn [{ json: { ok: false, error: 'Job creation failed', detail: r.message ?? r.code ?? 'Backend rejected the request' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        700,
+        500
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-create-failed",
+      "name": "respond-create-failed",
+      "notes": "Returns HTTP 500 to the caller.",
+      "parameters": {
+        "options": {
+          "responseCode": 500
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        900,
+        500
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "id": "init-poll",
+      "name": "init-poll",
+      "notes": "Seeds the poll loop: jobId + attempt counter (max 120 attempts × 20s ≈ 40 min).",
+      "parameters": {
+        "jsCode": "const data = $input.first().json.data;\nreturn [{ json: { jobId: data.id, attempts: 0 } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        900,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "get-status",
+      "name": "get-status",
+      "notes": "GET /api/v1/jobs/:id — job status + 15 stage states + recent events. The backend worker updates stages itself.",
+      "parameters": {
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        },
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ $json.jobId }}"
+      },
+      "position": [
+        1100,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "normalize-status",
+      "name": "normalize-status",
+      "notes": "Carries jobId forward (HTTP node replaces item data) and bumps the attempt counter.",
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst prev = $('init-poll').first().json;\nconst job = res.data ?? {};\nreturn [{ json: { jobId: prev.jobId, attempts: prev.attempts + 1, status: job.status ?? 'UNKNOWN', job } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1300,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "is-done",
+      "name": "is-done",
+      "notes": "True: terminal state (COMPLETED / FAILED / CANCELLED / WAITING_FOR_REVIEW) → route. False: keep polling.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "regex",
+              "value1": "={{ $json.status }}",
+              "value2": "^(COMPLETED|FAILED|CANCELLED|WAITING_FOR_REVIEW)$"
+            }
+          ]
+        }
+      },
+      "position": [
+        1500,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "within-limit",
+      "name": "within-limit",
+      "notes": "True (attempts ≤ 120): wait and poll again. False: give up waiting (job may still run; caller can poll manually).",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "operation": "smallerEqual",
+              "value1": "={{ $json.attempts }}",
+              "value2": 120
+            }
+          ]
+        }
+      },
+      "position": [
+        1500,
+        520
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "wait-poll",
+      "name": "wait-poll",
+      "notes": "Wait 20s between polls. Loops back to get-status.",
+      "parameters": {
+        "amount": 20,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "position": [
+        1700,
+        520
+      ],
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1
+    },
+    {
+      "id": "build-timeout",
+      "name": "build-timeout",
+      "notes": "Builds the poll-timeout payload (HTTP 504).",
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { ok: false, jobId: j.jobId, status: j.status, error: 'Timed out waiting for job completion (40 min). The job may still be running — check it with GET /api/v1/jobs/' + j.jobId } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1700,
+        700
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-timeout",
+      "name": "respond-timeout",
+      "notes": "Returns HTTP 504 to the caller.",
+      "parameters": {
+        "options": {
+          "responseCode": 504
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        1900,
+        700
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "id": "is-completed",
+      "name": "is-completed",
+      "notes": "True: COMPLETED → deliver. False: check review state.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "COMPLETED"
+            }
+          ]
+        }
+      },
+      "position": [
+        1700,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "is-review",
+      "name": "is-review",
+      "notes": "True: WAITING_FOR_REVIEW → human approval via dashboard. False: FAILED/CANCELLED → failure response.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "WAITING_FOR_REVIEW"
+            }
+          ]
+        }
+      },
+      "position": [
+        1900,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "build-success",
+      "name": "build-success",
+      "notes": "Builds the success payload: jobId, download URL, result URL, per-stage states.",
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst base = String($env.BACKEND_URL ?? '').replace(/\\/$/, '');\nconst stages = Array.isArray(j.job && j.job.stages) ? j.job.stages.map(s => ({ key: s.stageKey ?? s.key, status: s.status })) : [];\nreturn [{ json: { ok: true, jobId: j.jobId, status: j.status, downloadUrl: base + '/api/v1/jobs/' + j.jobId + '/download', resultUrl: base + '/api/v1/jobs/' + j.jobId + '/result', stages } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        1900,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-success",
+      "name": "respond-success",
+      "notes": "Returns HTTP 200 with the download URL to the caller.",
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        2100,
+        140
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "id": "build-review",
+      "name": "build-review",
+      "notes": "Builds the human-review payload.",
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst base = String($env.BACKEND_URL ?? '').replace(/\\/$/, '');\nreturn [{ json: { ok: true, jobId: j.jobId, status: 'WAITING_FOR_REVIEW', message: 'Job needs human review before delivery. Open the dashboard to approve or reject.', dashboardUrl: base + '/jobs/' + j.jobId } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        2100,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-review",
+      "name": "respond-review",
+      "notes": "Returns HTTP 200 (review pending) to the caller.",
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        2300,
+        300
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "id": "build-failed",
+      "name": "build-failed",
+      "notes": "Builds the job-failure payload from the backend's error message.",
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { ok: false, jobId: j.jobId, status: j.status, error: (j.job && (j.job.errorMessage || j.job.lastError)) || 'Job failed. Check the dashboard for details.' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        2100,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-failed",
+      "name": "respond-failed",
+      "notes": "Returns HTTP 500 to the caller.",
+      "parameters": {
+        "options": {
+          "responseCode": 500
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        2300,
+        460
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    }
+  ],
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET"
+  ],
+  "tags": [
+    {
+      "name": "product-video"
+    },
+    {
+      "name": "phase-3"
+    }
+  ]
+}

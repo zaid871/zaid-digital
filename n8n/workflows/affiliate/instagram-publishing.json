@@ -1,0 +1,754 @@
+{
+  "name": "affiliate-instagram-publishing",
+  "description": "\u00a718.11 Instagram Publishing: ELIGIBILITY GATE FIRST (fails safe \u2014 brand-new accounts may lack API publishing eligibility) \u2192 container \u2192 poll processing \u2192 publish \u2192 save media ID. Caption includes affiliate disclosure.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product (LISTED), downloadUrl} with x-n8n-secret.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/instagram"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "best-time-gate",
+      "name": "best-time-gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Best-time gate: publish inside IST peak windows (07:00-09:00, 19:00-22:00)\n// unless payload body.forcePublish === true. Mirrors\n// src/lib/publishing/best-time.ts (slots 07:30, 08:30, 19:30, 20:30 IST).\nconst item = $input.first().json;\nconst body = item.body ?? {};\nconst forced = body.forcePublish === true;\nconst istNow = new Date(Date.now() + (5 * 60 + 30) * 60000);\nconst mins = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();\nconst peak = (mins >= 420 && mins < 540) || (mins >= 1140 && mins < 1320);\nconst slots = [450, 510, 1170, 1230];\nconst next = slots.find((s) => s > mins);\nconst fmt = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0') + ' IST';\nconst nextSlotIst = next === undefined ? '07:30 IST (tomorrow)' : fmt(next);\nreturn [{ json: { ...item, bestTime: { peakNow: peak || forced, forced, nextSlotIst } } }];"
+      }
+    },
+    {
+      "id": "if-peak-time",
+      "name": "if-peak-time",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        760,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.bestTime.peakNow }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-deferred",
+      "name": "park-deferred",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'DEFERRED' },\n  reason: 'outside_peak_window',\n  nextSlotIst: $json.bestTime ? $json.bestTime.nextSlotIst : null,\n  note: 'Publish at the next IST peak slot (07:30 / 08:30 / 19:30 / 20:30), or re-trigger with forcePublish=true' } }];"
+      }
+    },
+    {
+      "id": "verify-ig-eligibility",
+      "name": "verify-ig-eligibility",
+      "notes": "ELIGIBILITY GATE (\u00a713) \u2014 runs FIRST and fails safe. Verifies the IG account is BUSINESS/CREATOR and the token works. A brand-new IG account may lack API publishing eligibility \u2014 NEVER attempt publish without this passing. Required token permission: instagram_business_content_publish.",
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.facebook.com/v21.0/{{ $('resolve-account').first().json.data.igUserId }}?fields=id,username&access_token={{ $('resolve-account').first().json.data.igAccessToken }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "classify-eligibility",
+      "name": "classify-eligibility",
+      "notes": "Eligibility verdict from the Graph API response.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\n// account_type is NOT readable on the IG User node with Facebook-Login tokens\n// (Graph v21.0 returns #100 'Tried accessing nonexisting field'). The IG account\n// is linked as the Page's instagram_business_account, which is only possible for\n// professional (Business/Creator) accounts \u2014 so a valid id+username IS the proof.\nconst eligible = Boolean(j.id) && Boolean(j.username);\nreturn [{ json: { eligible, account_type: acct, igUserId: j.id ?? null,\n  reason: eligible ? '' : 'ig_eligibility_failed (no id/username returned - check token + Page link)' } }];"
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-eligible",
+      "name": "if-eligible",
+      "notes": "Eligible \u2192 publish flow. Else NEEDS_REVIEW (fail-safe).",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.eligible }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1420,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "park-ig",
+      "name": "park-ig",
+      "notes": "Eligibility failed \u2192 NEEDS_REVIEW. Nothing is published (\u00a713).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'NEEDS_REVIEW' },\n  reason: $json.reason || 'ig_eligibility_failed',\n  note: 'Set up IG business account + token perms, then re-trigger' } }];"
+      },
+      "position": [
+        1640,
+        480
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "create-container",
+      "name": "create-container",
+      "notes": "Creates the Reels media container (upload step, \u00a713).",
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/{{ $('resolve-account').first().json.data.igUserId }}/media",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ media_type: 'REELS', video_url: $('webhook-entry').first().json.body.downloadUrl, caption: $('webhook-entry').first().json.body.product.script.caption + ' ' + 'Affiliate disclosure: contains affiliate links.', access_token: $('resolve-account').first().json.data.igAccessToken }) }}"
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-container-ok",
+      "name": "if-container-ok",
+      "notes": "Container created \u2192 poll processing. Else park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.id }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        1860,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "init-proc-poll",
+      "name": "init-proc-poll",
+      "notes": "Seeds processing poll (10 \u00d7 30s).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { containerId: $input.first().json.id, attempts: 0 } }];"
+      },
+      "position": [
+        2080,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check-processing",
+      "name": "check-processing",
+      "notes": "Polls container processing status (\u00a713).",
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.facebook.com/v21.0/{{ $json.containerId }}?fields=status_code&access_token={{ $('resolve-account').first().json.data.igAccessToken }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        2300,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "normalize-proc",
+      "name": "normalize-proc",
+      "notes": "Carries containerId, bumps attempts.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $input.first().json;\nconst prev = $('init-proc-poll').first().json;\nreturn [{ json: { containerId: prev.containerId, attempts: prev.attempts + 1,\n  status: res.status_code ?? 'UNKNOWN' } }];"
+      },
+      "position": [
+        2520,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "is-proc-done",
+      "name": "is-proc-done",
+      "notes": "FINISHED \u2192 publish. ERROR \u2192 park. Else keep polling.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "regex",
+              "value1": "={{ $json.status }}",
+              "value2": "^(FINISHED|ERROR)$"
+            }
+          ]
+        }
+      },
+      "position": [
+        2740,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "proc-within-limit",
+      "name": "proc-within-limit",
+      "notes": "\u226410 polls \u2192 wait. Else park (timeout).",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "operation": "smallerEqual",
+              "value1": "={{ $json.attempts }}",
+              "value2": 10
+            }
+          ]
+        }
+      },
+      "position": [
+        2740,
+        360
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "wait-proc",
+      "name": "wait-proc",
+      "notes": "30s between processing polls.",
+      "parameters": {
+        "amount": 30,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "position": [
+        2960,
+        360
+      ],
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1
+    },
+    {
+      "id": "park-proc",
+      "name": "park-proc",
+      "notes": "Processing failed/timed out \u2192 NEEDS_REVIEW.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'NEEDS_REVIEW' },\n  reason: 'ig_processing_failed_or_timeout' } }];"
+      },
+      "position": [
+        2960,
+        540
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "publish-reel",
+      "name": "publish-reel",
+      "notes": "Publishes the finished container (\u00a713).",
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/{{ $('resolve-account').first().json.data.igUserId }}/media_publish",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ creation_id: $json.containerId, access_token: $('resolve-account').first().json.data.igAccessToken }) }}"
+      },
+      "position": [
+        2960,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-published",
+      "name": "if-published",
+      "notes": "Published \u2192 save media ID. Else park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.id }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        3180,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "save-media-id",
+      "name": "save-media-id",
+      "notes": "Saves IG publication ID separately from FB (\u00a713, \u00a719). State PUBLISHED.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst p = (wh.body ?? wh).product ?? {};\nreturn [{ json: { product: { ...p, state: 'PUBLISHED',\n  publishedAt: new Date().toISOString(),\n  publications: { ...(p.publications ?? {}),\n    instagram: { mediaId: $input.first().json.id, publishedAt: new Date().toISOString() } } } } }];"
+      },
+      "position": [
+        3400,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-published",
+      "name": "log-published",
+      "notes": "Publish log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[instagram] PUBLISHED'); return [$input.first()];"
+      },
+      "position": [
+        3620,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-publish-fail",
+      "name": "park-publish-fail",
+      "notes": "Publish failed \u2192 NEEDS_REVIEW (safe retry path).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'NEEDS_REVIEW' },\n  reason: 'ig_publish_failed' } }];"
+      },
+      "position": [
+        3400,
+        280
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "record-publish",
+      "name": "record-publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3860,
+        40
+      ],
+      "notes": "Record the publish in the backend so the repost monitor can track performance. Best-effort: never fails the publish.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/records",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: 'instagram_reels', platformMediaId: $('save-media-id').first().json.product.publications.instagram.mediaId, videoUrl: $('webhook-entry').first().json.body.downloadUrl, caption: $('webhook-entry').first().json.body.product.script.caption, publishedAt: new Date().toISOString(), jobId: $('webhook-entry').first().json.body.jobId }) }}"
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/resolve-account",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ productType: ($('webhook-entry').first().json.body.product || {}).productType, niche: ($('webhook-entry').first().json.body.product || {}).niche, accountKey: $('webhook-entry').first().json.body.accountKey }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "resolve-account",
+      "name": "resolve-account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        870,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "best-time-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "verify-ig-eligibility": {
+      "main": [
+        [
+          {
+            "node": "classify-eligibility",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "classify-eligibility": {
+      "main": [
+        [
+          {
+            "node": "if-eligible",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-eligible": {
+      "main": [
+        [
+          {
+            "node": "create-container",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-ig",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create-container": {
+      "main": [
+        [
+          {
+            "node": "if-container-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-container-ok": {
+      "main": [
+        [
+          {
+            "node": "init-proc-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-publish-fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "init-proc-poll": {
+      "main": [
+        [
+          {
+            "node": "check-processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-processing": {
+      "main": [
+        [
+          {
+            "node": "normalize-proc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-proc": {
+      "main": [
+        [
+          {
+            "node": "is-proc-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-proc-done": {
+      "main": [
+        [
+          {
+            "node": "publish-reel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "proc-within-limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "proc-within-limit": {
+      "main": [
+        [
+          {
+            "node": "wait-proc",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-proc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-proc": {
+      "main": [
+        [
+          {
+            "node": "check-processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "publish-reel": {
+      "main": [
+        [
+          {
+            "node": "if-published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-published": {
+      "main": [
+        [
+          {
+            "node": "save-media-id",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-publish-fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save-media-id": {
+      "main": [
+        [
+          {
+            "node": "log-published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "best-time-gate": {
+      "main": [
+        [
+          {
+            "node": "if-peak-time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-peak-time": {
+      "main": [
+        [
+          {
+            "node": "resolve-account",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-deferred",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log-published": {
+      "main": [
+        [
+          {
+            "node": "record-publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "resolve-account": {
+      "main": [
+        [
+          {
+            "node": "verify-ig-eligibility",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL",
+    "IG_USER_ID",
+    "IG_ACCESS_TOKEN"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

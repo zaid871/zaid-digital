@@ -1,0 +1,75 @@
+# Parallel render batch — one job per runner, up to 20 concurrent.
+#
+# Triggered by the Tool Registry's GitHub Actions adapter
+# (POST /repos/{owner}/{repo}/actions/workflows/render-batch.yml/dispatches)
+# or manually from the Actions tab. Each run renders ONE job from a
+# render bundle (GET /api/v1/jobs/:id/render-bundle) — no DB access and
+# no backend credentials on the runner; the bundle's asset URLs are
+# signed and expire after 2 h.
+#
+# Required repository secrets:
+#   N8N_WEBHOOK_SECRET — the backend's shared secret (x-n8n-secret header)
+#   API_BASE           — backend base URL, e.g. http://158.180.19.153/api/v1
+#                        (set as a secret so the URL is not in the logs;
+#                        or pass apiBase as a dispatch input instead)
+#
+# The finished MP4 is kept as a workflow artifact (90 days) and the
+# render stage is reported back via stage-callback, so n8n sees the
+# job complete exactly as if the VM worker had rendered it.
+name: render-batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundleUrl:
+        description: "Full render-bundle URL (GET /api/v1/jobs/:id/render-bundle)"
+        required: true
+        type: string
+      jobId:
+        description: "Job id being rendered"
+        required: true
+        type: string
+      apiBase:
+        description: "Backend API base, e.g. http://158.180.19.153/api/v1"
+        required: false
+        type: string
+      shardIndex:
+        description: "Shard index (0-based) for batch bookkeeping"
+        required: false
+        default: "0"
+        type: string
+      shardTotal:
+        description: "Total shards in this batch"
+        required: false
+        default: "1"
+        type: string
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      N8N_WEBHOOK_SECRET: ${{ secrets.N8N_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Render job
+        run: |
+          npx tsx scripts/gh-render-batch.ts \
+            --bundleUrl "${{ inputs.bundleUrl }}" \
+            --jobId "${{ inputs.jobId }}" \
+            --apiBase "${{ inputs.apiBase || secrets.API_BASE }}"
+      - name: Upload finished video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-${{ inputs.jobId }}
+          path: render-out/final-${{ inputs.jobId }}.mp4
+          if-no-files-found: error
+          retention-days: 90

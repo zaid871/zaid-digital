@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="860" viewBox="0 0 1280 860" font-family="Segoe UI, system-ui, sans-serif">
+<rect width="1280" height="860" rx="16" fill="#f8fafc"/>
+<text x="40" y="44" font-size="26" font-weight="700" fill="#0f172a">Product URL → Final Video: poora workflow</text>
+<text x="40" y="70" font-size="14" fill="#64748b">Sach nikaalo → sach se script → script se scenes → scenes se video — har qadam pe jhooth pakadne wale guards</text>
+<rect x="28" y="96" width="1224" height="202" rx="12" fill="#eff6ff"/>
+<text x="48" y="122" font-size="15" font-weight="700" fill="#1d4ed8">🔍 RESEARCH — sach nikaalo</text>
+<rect x="40" y="140" width="216" height="104" rx="10" fill="#ffffff" stroke="#1d4ed8" stroke-width="2"/>
+<text x="52" y="164" font-size="14" font-weight="700" fill="#0f172a">1 · URL validation</text>
+<text x="52" y="186" font-size="12.5" fill="#475569">Link ki hifazat:</text>
+<text x="52" y="205" font-size="12.5" fill="#475569">format + SSRF block</text>
+<text x="52" y="224" font-size="12.5" fill="#475569">(localhost / private IPs nahi)</text>
+<line x1="256" y1="192.0" x2="274" y2="192.0" stroke="#1d4ed8" stroke-width="2.5"/>
+<polygon points="272,186.0 272,198.0 281,192.0" fill="#1d4ed8"/>
+<rect x="274" y="140" width="216" height="104" rx="10" fill="#ffffff" stroke="#1d4ed8" stroke-width="2"/>
+<text x="286" y="164" font-size="14" font-weight="700" fill="#0f172a">2 · Product extraction</text>
+<text x="286" y="186" font-size="12.5" fill="#475569">Page fetch: JSON-LD / OpenGraph</text>
+<text x="286" y="205" font-size="12.5" fill="#475569">+ HTML se naam, brand, specs,</text>
+<text x="286" y="224" font-size="12.5" fill="#475569">features, images + source/time</text>
+<line x1="490" y1="192.0" x2="508" y2="192.0" stroke="#1d4ed8" stroke-width="2.5"/>
+<polygon points="506,186.0 506,198.0 515,192.0" fill="#1d4ed8"/>
+<rect x="508" y="140" width="216" height="104" rx="10" fill="#ffffff" stroke="#1d4ed8" stroke-width="2"/>
+<text x="520" y="164" font-size="14" font-weight="700" fill="#0f172a">3 · Product research</text>
+<text x="520" y="186" font-size="12.5" fill="#475569">Specs, features, package,</text>
+<text x="520" y="205" font-size="12.5" fill="#475569">warranty, compatibility</text>
+<text x="520" y="224" font-size="12.5" fill="#475569">saboot ke saath jama</text>
+<line x1="724" y1="192.0" x2="742" y2="192.0" stroke="#1d4ed8" stroke-width="2.5"/>
+<polygon points="740,186.0 740,198.0 749,192.0" fill="#1d4ed8"/>
+<rect x="742" y="140" width="216" height="104" rx="10" fill="#ffffff" stroke="#1d4ed8" stroke-width="2"/>
+<text x="754" y="164" font-size="14" font-weight="700" fill="#0f172a">4 · Fact verification</text>
+<text x="754" y="186" font-size="12.5" fill="#475569">Har daave ki grading:</text>
+<text x="754" y="205" font-size="12.5" fill="#475569">VERIFIED ✅ · UNVERIFIED ⚠️</text>
+<text x="754" y="224" font-size="12.5" fill="#475569">AI_INFERENCE ❌ (video me nahi)</text>
+<line x1="958" y1="192.0" x2="976" y2="192.0" stroke="#1d4ed8" stroke-width="2.5"/>
+<polygon points="974,186.0 974,198.0 983,192.0" fill="#1d4ed8"/>
+<rect x="976" y="140" width="216" height="104" rx="10" fill="#ffffff" stroke="#1d4ed8" stroke-width="2"/>
+<text x="988" y="164" font-size="14" font-weight="700" fill="#0f172a">5 · Media analysis</text>
+<text x="988" y="186" font-size="12.5" fill="#475569">Asli product images ka tajziya:</text>
+<text x="988" y="205" font-size="12.5" fill="#475569">angle, roshni, chhupi hui cheezen</text>
+<path d="M 1084.0,192.0 L 1084.0,304 L 148.0,304 L 148.0,354" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="7,6" fill="none"/>
+<polygon points="142.0,352 154.0,352 148.0,362" fill="#94a3b8"/>
+<rect x="28" y="310" width="1224" height="202" rx="12" fill="#fff7ed"/>
+<text x="48" y="336" font-size="15" font-weight="700" fill="#7c2d12">🎬 CREATIVE — video banao</text>
+<rect x="40" y="354" width="216" height="104" rx="10" fill="#ffffff" stroke="#7c2d12" stroke-width="2"/>
+<text x="52" y="378" font-size="14" font-weight="700" fill="#0f172a">6 · Compliance review</text>
+<text x="52" y="400" font-size="12.5" fill="#475569">Shariah filter: music nahi,</text>
+<text x="52" y="419" font-size="12.5" fill="#475569">jhoote daave nahi, keemat-pattern</text>
+<text x="52" y="438" font-size="12.5" fill="#475569">reject (NEEDS_REVIEW → park)</text>
+<line x1="256" y1="406.0" x2="274" y2="406.0" stroke="#7c2d12" stroke-width="2.5"/>
+<polygon points="272,400.0 272,412.0 281,406.0" fill="#7c2d12"/>
+<rect x="274" y="354" width="216" height="104" rx="10" fill="#ffffff" stroke="#7c2d12" stroke-width="2"/>
+<text x="286" y="378" font-size="14" font-weight="700" fill="#0f172a">7 · Creative planning</text>
+<text x="286" y="400" font-size="12.5" fill="#475569">Audience, hook, kaunse points</text>
+<text x="286" y="419" font-size="12.5" fill="#475569">dikhaane hain, CTA — sirf</text>
+<text x="286" y="438" font-size="12.5" fill="#475569">VERIFIED facts aage badhte hain</text>
+<line x1="490" y1="406.0" x2="508" y2="406.0" stroke="#7c2d12" stroke-width="2.5"/>
+<polygon points="506,400.0 506,412.0 515,406.0" fill="#7c2d12"/>
+<rect x="508" y="354" width="216" height="104" rx="10" fill="#ffffff" stroke="#7c2d12" stroke-width="2"/>
+<text x="520" y="378" font-size="14" font-weight="700" fill="#0f172a">8 · Script generation</text>
+<text x="520" y="400" font-size="12.5" fill="#475569">Natural Hinglish narration</text>
+<text x="520" y="419" font-size="12.5" fill="#475569">keemat ka zikr nahi</text>
+<text x="520" y="438" font-size="12.5" fill="#475569">HF_TOKEN nahi → fail closed</text>
+<line x1="724" y1="406.0" x2="742" y2="406.0" stroke="#7c2d12" stroke-width="2.5"/>
+<polygon points="740,400.0 740,412.0 749,406.0" fill="#7c2d12"/>
+<rect x="742" y="354" width="216" height="104" rx="10" fill="#ffffff" stroke="#7c2d12" stroke-width="2"/>
+<text x="754" y="378" font-size="14" font-weight="700" fill="#0f172a">9 · Voiceover generation</text>
+<text x="754" y="400" font-size="12.5" fill="#475569">hi-IN-SwaraNeural se</text>
+<text x="754" y="419" font-size="12.5" fill="#475569">voiceover + ffprobe se</text>
+<text x="754" y="438" font-size="12.5" fill="#475569">caption timing match</text>
+<line x1="958" y1="406.0" x2="976" y2="406.0" stroke="#7c2d12" stroke-width="2.5"/>
+<polygon points="974,400.0 974,412.0 983,406.0" fill="#7c2d12"/>
+<rect x="976" y="354" width="216" height="104" rx="10" fill="#ffffff" stroke="#7c2d12" stroke-width="2"/>
+<text x="988" y="378" font-size="14" font-weight="700" fill="#0f172a">10 · Storyboard</text>
+<text x="988" y="400" font-size="12.5" fill="#475569">Har scene ka naqsha:</text>
+<text x="988" y="419" font-size="12.5" fill="#475569">narration + visual prompt +</text>
+<text x="988" y="438" font-size="12.5" fill="#475569">camera motion</text>
+<path d="M 1084.0,406.0 L 1084.0,518 L 148.0,518 L 148.0,568" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="7,6" fill="none"/>
+<polygon points="142.0,566 154.0,566 148.0,576" fill="#94a3b8"/>
+<rect x="28" y="524" width="1224" height="202" rx="12" fill="#ecfdf5"/>
+<text x="48" y="550" font-size="15" font-weight="700" fill="#065f46">⚙️ SCENES · RENDER · QA — check karke do</text>
+<rect x="40" y="568" width="216" height="104" rx="10" fill="#ffffff" stroke="#065f46" stroke-width="2"/>
+<text x="52" y="592" font-size="14" font-weight="700" fill="#0f172a">11 · AI visuals (FLUX.1)</text>
+<text x="52" y="614" font-size="12.5" fill="#475569">Identity Package se cinematic</text>
+<text x="52" y="633" font-size="12.5" fill="#475569">prompt → har scene me product</text>
+<text x="52" y="652" font-size="12.5" fill="#475569">ek jaisa dikhe (image-to-video)</text>
+<line x1="256" y1="620.0" x2="274" y2="620.0" stroke="#065f46" stroke-width="2.5"/>
+<polygon points="272,614.0 272,626.0 281,620.0" fill="#065f46"/>
+<rect x="274" y="568" width="216" height="104" rx="10" fill="#ffffff" stroke="#065f46" stroke-width="2"/>
+<text x="286" y="592" font-size="14" font-weight="700" fill="#0f172a">12 · AI video (2-tier)</text>
+<text x="286" y="614" font-size="12.5" fill="#475569">Tier A: HF Spaces camera motion</text>
+<text x="286" y="633" font-size="12.5" fill="#475569">Tier B: FFmpeg motion (default)</text>
+<text x="286" y="652" font-size="12.5" fill="#475569">Tier A fail ho to auto-fallback</text>
+<line x1="490" y1="620.0" x2="508" y2="620.0" stroke="#065f46" stroke-width="2.5"/>
+<polygon points="506,614.0 506,626.0 515,620.0" fill="#065f46"/>
+<rect x="508" y="568" width="216" height="104" rx="10" fill="#ffffff" stroke="#065f46" stroke-width="2"/>
+<text x="520" y="592" font-size="14" font-weight="700" fill="#0f172a">13 · Render</text>
+<text x="520" y="614" font-size="12.5" fill="#475569">Scenes jodna + end-card 2.5s +</text>
+<text x="520" y="633" font-size="12.5" fill="#475569">loudnorm voiceover + captions</text>
+<text x="520" y="652" font-size="12.5" fill="#475569">1080×1920 · 30fps · H.264/AAC</text>
+<line x1="724" y1="620.0" x2="742" y2="620.0" stroke="#065f46" stroke-width="2.5"/>
+<polygon points="740,614.0 740,626.0 749,620.0" fill="#065f46"/>
+<rect x="742" y="568" width="216" height="104" rx="10" fill="#ffffff" stroke="#065f46" stroke-width="2"/>
+<text x="754" y="592" font-size="14" font-weight="700" fill="#0f172a">14 · Quality assurance</text>
+<text x="754" y="614" font-size="12.5" fill="#475569">16 checks: 12 technical</text>
+<text x="754" y="633" font-size="12.5" fill="#475569">(black/freeze detect…) + 4</text>
+<text x="754" y="652" font-size="12.5" fill="#475569">content — fail → job fail</text>
+<line x1="958" y1="620.0" x2="976" y2="620.0" stroke="#065f46" stroke-width="2.5"/>
+<polygon points="974,614.0 974,626.0 983,620.0" fill="#065f46"/>
+<rect x="976" y="568" width="216" height="104" rx="10" fill="#ffffff" stroke="#065f46" stroke-width="2"/>
+<text x="988" y="592" font-size="14" font-weight="700" fill="#0f172a">15 · Delivery</text>
+<text x="988" y="614" font-size="12.5" fill="#475569">Sirf QA-pass video deliver</text>
+<text x="988" y="633" font-size="12.5" fill="#475569">/download — price-free</text>
+<text x="988" y="652" font-size="12.5" fill="#475569">end-card</text>
+<rect x="28" y="768" width="1224" height="64" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+<text x="48" y="796" font-size="14" font-weight="700" fill="#b91c1c">🛡️ Har stage pe guards (fail closed)</text>
+<text x="48" y="818" font-size="13" fill="#7f1d1d">Keemat nahi · music nahi · sirf VERIFIED facts video me · UNVERIFIED/AI_INFERENCE narration se baahar · shak ho to job park (WAITING_FOR_REVIEW)</text>
+</svg>

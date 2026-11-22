@@ -1,0 +1,1057 @@
+{
+  "name": "affiliate-performance-repost",
+  "description": "Repost ('second chance') loop: daily sweep of published IG Reels, hypothesis-labeled underperformance analysis in the backend, new-caption variants built by the worker, auto-republish at best-time slots. Limits: 1 variant per original, 48h min age, max 2 variants per run, parked (needs_review) variants never auto-publish.",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Daily 07:30 IST. Drives the repost sweep.",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sweep",
+      "name": "sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        300
+      ],
+      "notes": "Backend: monitor published Reels, analyze, create variant records (max 2/run).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/sweep",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-variants",
+      "name": "if-variants",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "operation": "larger",
+              "value1": "={{ $json.data.variants.length }}",
+              "value2": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "no-variants",
+      "name": "no-variants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        120
+      ],
+      "notes": "Terminal: nothing to repost today.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] no variants this run'); return [{ json: { done: true } }];"
+      }
+    },
+    {
+      "id": "run-complete",
+      "name": "run-complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        120
+      ],
+      "notes": "Terminal: all variants handled.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] run complete'); return [{ json: { done: true } }];"
+      }
+    },
+    {
+      "id": "loop-variants",
+      "name": "loop-variants",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        720,
+        420
+      ],
+      "notes": "One variant at a time (IG daily limits + serial safety).",
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "init-poll",
+      "name": "init-poll",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const v = $input.first().json;\nreturn [{ json: { variantId: v.variantId, pollStart: Date.now(), maxWaitMs: 30 * 60 * 1000 } }];"
+      }
+    },
+    {
+      "id": "poll-variant",
+      "name": "poll-variant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        420
+      ],
+      "notes": "Worker builds the new caption; poll until ready.",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/variants/{{ $json.variantId }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "check-ready",
+      "name": "check-ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $input.first().json.data ?? {};\nconst init = $('init-poll').first().json;\nreturn [{ json: { variantId: init.variantId, status: res.status ?? 'UNKNOWN',\n  caption: res.caption ?? null, videoUrl: res.videoUrl ?? null,\n  elapsedMs: Date.now() - init.pollStart, maxWaitMs: init.maxWaitMs } }];"
+      }
+    },
+    {
+      "id": "if-parked",
+      "name": "if-parked",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        420
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "needs_review"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-variant-review",
+      "name": "park-variant-review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        240
+      ],
+      "notes": "Caption failed compliance -> human review, never auto-publish.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] variant needs review, not auto-publishing:', $input.first().json.variantId);\nreturn [{ json: { parked: 'needs_review' } }];"
+      }
+    },
+    {
+      "id": "if-ready",
+      "name": "if-ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        540
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "ready"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-timed-out",
+      "name": "if-timed-out",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        420
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "operation": "larger",
+              "value1": "={{ $json.elapsedMs }}",
+              "value2": "={{ $json.maxWaitMs }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-variant-timeout",
+      "name": "park-variant-timeout",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] variant build timed out:', $input.first().json.variantId);\nreturn [{ json: { parked: 'timeout' } }];"
+      }
+    },
+    {
+      "id": "wait-60s",
+      "name": "wait-60s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2400,
+        540
+      ],
+      "notes": "60s between caption-build polls.",
+      "parameters": {
+        "amount": 60,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "best-time-gate",
+      "name": "best-time-gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        680
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Best-time gate (mirrors src/lib/publishing/best-time.ts): IST peak\n// windows 07:00-09:00 + 19:00-22:00. Off-peak -> wait until next slot.\nconst item = $input.first().json;\nconst istNow = new Date(Date.now() + (5 * 60 + 30) * 60000);\nconst mins = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();\nconst peak = (mins >= 420 && mins < 540) || (mins >= 1140 && mins < 1320);\nconst slots = [450, 510, 1170, 1230];\nconst next = slots.find((s) => s > mins);\nconst dayStartUtc = Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate());\nconst off = (5 * 60 + 30) * 60000;\nconst slotUtcMs = next === undefined ? dayStartUtc + 86400000 + 450 * 60000 - off : dayStartUtc + next * 60000 - off;\nreturn [{ json: { ...item, bestTime: { peakNow: peak, nextSlotIso: new Date(slotUtcMs).toISOString() } } }];"
+      }
+    },
+    {
+      "id": "if-peak",
+      "name": "if-peak",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2400,
+        680
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "operation": "true",
+              "value1": "={{ $json.bestTime.peakNow }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait-until-slot",
+      "name": "wait-until-slot",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        540
+      ],
+      "notes": "Wait for the next IST peak slot, then publish.",
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ $json.bestTime.nextSlotIso }}"
+      }
+    },
+    {
+      "id": "create-variant-container",
+      "name": "create-variant-container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        800
+      ],
+      "notes": "Same video, new caption. Never reposts without a new caption.",
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/{{ $env.IG_USER_ID }}/media",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ media_type: 'REELS', video_url: $json.videoUrl, caption: ($json.caption ?? '') + '\\n\\nAffiliate disclosure: contains affiliate links.', access_token: $env.IG_ACCESS_TOKEN }) }}"
+      }
+    },
+    {
+      "id": "if-container-ok",
+      "name": "if-container-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        800
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.id }}",
+              "value2": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-container-fail",
+      "name": "park-container-fail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        660
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] container creation failed');\nreturn [{ json: { parked: 'container_failed' } }];"
+      }
+    },
+    {
+      "id": "init-proc-poll",
+      "name": "init-proc-poll",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        920
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const prev = $('check-ready').first().json;\nreturn [{ json: { containerId: $input.first().json.id, variantId: prev.variantId, attempts: 0 } }];"
+      }
+    },
+    {
+      "id": "check-processing",
+      "name": "check-processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        920
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.facebook.com/v21.0/{{ $json.containerId }}?fields=status_code&access_token={{ $env.IG_ACCESS_TOKEN }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "normalize-proc",
+      "name": "normalize-proc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        920
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $input.first().json;\nconst prev = $('init-proc-poll').first().json;\nreturn [{ json: { containerId: prev.containerId, variantId: prev.variantId,\n  attempts: prev.attempts + 1, status: res.status_code ?? 'UNKNOWN' } }];"
+      }
+    },
+    {
+      "id": "is-proc-done",
+      "name": "is-proc-done",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        3840,
+        920
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "regex",
+              "value1": "={{ $json.status }}",
+              "value2": "^(FINISHED|ERROR)$"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-proc-ok",
+      "name": "if-proc-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        4080,
+        800
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "FINISHED"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-proc-fail",
+      "name": "park-proc-fail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4320,
+        660
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] processing failed:', $input.first().json.status);\nreturn [{ json: { parked: 'processing_failed' } }];"
+      }
+    },
+    {
+      "id": "proc-within-limit",
+      "name": "proc-within-limit",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        4080,
+        1040
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "operation": "smallerEqual",
+              "value1": "={{ $json.attempts }}",
+              "value2": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wait-proc",
+      "name": "wait-proc",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4320,
+        1040
+      ],
+      "notes": "30s between processing polls.",
+      "parameters": {
+        "amount": 30,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "publish-variant",
+      "name": "publish-variant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4320,
+        800
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/{{ $env.IG_USER_ID }}/media_publish",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ creation_id: $json.containerId, access_token: $env.IG_ACCESS_TOKEN }) }}"
+      }
+    },
+    {
+      "id": "if-published",
+      "name": "if-published",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        4560,
+        800
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.id }}",
+              "value2": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-publish-fail",
+      "name": "park-publish-fail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4800,
+        660
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[repost] publish failed');\nreturn [{ json: { parked: 'publish_failed' } }];"
+      }
+    },
+    {
+      "id": "update-variant-record",
+      "name": "update-variant-record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4800,
+        920
+      ],
+      "notes": "Link the new media ID to the variant record (variantOf stays).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/records",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: $('check-ready').first().json.variantId, platformMediaId: $json.id, status: 'published', publishedAt: new Date().toISOString() }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "sweep": {
+      "main": [
+        [
+          {
+            "node": "if-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-variants": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "no-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "loop-variants": {
+      "main": [
+        [
+          {
+            "node": "init-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "run-complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "init-poll": {
+      "main": [
+        [
+          {
+            "node": "poll-variant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "poll-variant": {
+      "main": [
+        [
+          {
+            "node": "check-ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-ready": {
+      "main": [
+        [
+          {
+            "node": "if-parked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-parked": {
+      "main": [
+        [
+          {
+            "node": "park-variant-review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "if-ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-variant-review": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-ready": {
+      "main": [
+        [
+          {
+            "node": "best-time-gate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "if-timed-out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-timed-out": {
+      "main": [
+        [
+          {
+            "node": "park-variant-timeout",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "wait-60s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-variant-timeout": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-60s": {
+      "main": [
+        [
+          {
+            "node": "poll-variant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "best-time-gate": {
+      "main": [
+        [
+          {
+            "node": "if-peak",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-peak": {
+      "main": [
+        [
+          {
+            "node": "create-variant-container",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "wait-until-slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-until-slot": {
+      "main": [
+        [
+          {
+            "node": "create-variant-container",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create-variant-container": {
+      "main": [
+        [
+          {
+            "node": "if-container-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-container-ok": {
+      "main": [
+        [
+          {
+            "node": "init-proc-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-container-fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-container-fail": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "init-proc-poll": {
+      "main": [
+        [
+          {
+            "node": "check-processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-processing": {
+      "main": [
+        [
+          {
+            "node": "normalize-proc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-proc": {
+      "main": [
+        [
+          {
+            "node": "is-proc-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-proc-done": {
+      "main": [
+        [
+          {
+            "node": "if-proc-ok",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "proc-within-limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-proc-ok": {
+      "main": [
+        [
+          {
+            "node": "publish-variant",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-proc-fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-proc-fail": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "proc-within-limit": {
+      "main": [
+        [
+          {
+            "node": "wait-proc",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-proc-fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-proc": {
+      "main": [
+        [
+          {
+            "node": "check-processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "publish-variant": {
+      "main": [
+        [
+          {
+            "node": "if-published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-published": {
+      "main": [
+        [
+          {
+            "node": "update-variant-record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-publish-fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-publish-fail": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "update-variant-record": {
+      "main": [
+        [
+          {
+            "node": "loop-variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "IG_USER_ID",
+    "IG_ACCESS_TOKEN"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

@@ -1,0 +1,293 @@
+{
+  "name": "affiliate-product-verification",
+  "description": "\u00a718.3 Product Verification: \u00a76 fact/source rules \u2192 VERIFIED | NEEDS_REVIEW | REJECTED.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {products:[...]} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/verification"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "verify-products",
+      "name": "verify-products",
+      "notes": "\u00a76 verification: requires name, valid sourceUrl, \u22652 sourced facts. Unsourced claims \u2192 NEEDS_REVIEW; insufficient research \u2192 REJECTED. Never invents specifications.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = ($input.first().json.body ?? $input.first().json);\nconst out = [];\nfor (const p of (body.products ?? [])) {\n  const facts = p.facts ?? [];\n  const sourced = facts.filter(f => f.claim && f.source);\n  let verdict = 'VERIFIED', reason = '';\n  if (!p.name || !p.sourceUrl || !/^https?:\\/\\//.test(p.sourceUrl || '')) {\n    verdict = 'REJECTED'; reason = 'missing name or valid sourceUrl';\n  } else if (sourced.length < 2) {\n    verdict = 'REJECTED'; reason = 'insufficient research (<2 sourced facts)';\n  } else if (facts.some(f => f.claim && !f.source)) {\n    verdict = 'NEEDS_REVIEW'; reason = 'unsourced claim present \u2014 never invent specs (\u00a76)';\n  }\n  // \u00a76 rules: no invented specs, no fake reviews, no false performance claims.\n  out.push({ json: { product: { ...p, state: verdict === 'VERIFIED' ? 'VERIFIED' : p.state },\n    verdict, reason } });\n}\nreturn out;"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "split-verdict",
+      "name": "split-verdict",
+      "notes": "Per-item routing: VERIFIED continues; others go to review/reject.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.verdict }}",
+              "value2": "VERIFIED"
+            }
+          ]
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-verified",
+      "name": "mark-verified",
+      "notes": "Sets state VERIFIED (\u00a719).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { ...j.product, state: 'VERIFIED',\n  verifiedAt: new Date().toISOString() } } }];"
+      },
+      "position": [
+        980,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-script",
+      "name": "trigger-script",
+      "notes": "Forwards VERIFIED products to script generation (\u00a718.5).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/script",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-verified",
+      "name": "log-verified",
+      "notes": "Logs verified items.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[verification] VERIFIED'); return [$input.first()];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check-review",
+      "name": "check-review",
+      "notes": "NEEDS_REVIEW \u2192 park for human. Otherwise REJECTED.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.verdict }}",
+              "value2": "NEEDS_REVIEW"
+            }
+          ]
+        }
+      },
+      "position": [
+        980,
+        460
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "park-review",
+      "name": "park-review",
+      "notes": "Parks uncertain cases (\u00a75, \u00a76). Never auto-continues.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.log('[verification] NEEDS_REVIEW', j.reason);\nreturn [{ json: { product: { ...j.product, state: 'NEEDS_REVIEW' }, reason: j.reason } }];"
+      },
+      "position": [
+        1200,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-rejected",
+      "name": "log-rejected",
+      "notes": "Logs rejections with reason.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.log('[verification] REJECTED', j.reason);\nreturn [{ json: { product: { ...j.product, state: 'REJECTED' }, reason: j.reason } }];"
+      },
+      "position": [
+        1200,
+        620
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "verify-products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "verify-products": {
+      "main": [
+        [
+          {
+            "node": "split-verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "split-verdict": {
+      "main": [
+        [
+          {
+            "node": "mark-verified",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "check-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-verified": {
+      "main": [
+        [
+          {
+            "node": "trigger-script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-script": {
+      "main": [
+        [
+          {
+            "node": "log-verified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-review": {
+      "main": [
+        [
+          {
+            "node": "park-review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

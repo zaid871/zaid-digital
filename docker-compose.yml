@@ -1,0 +1,148 @@
+# AI Product-to-Video Automation Platform — production compose stack.
+#
+#   proxy    Caddy: automatic Let's Encrypt HTTPS, reverse-proxies app + n8n
+#   app      Next.js frontend + /api/v1 backend
+#   worker   BullMQ consumer + FFmpeg rendering (15-stage pipeline driver)
+#   postgres PostgreSQL 16 (app data + n8n data)
+#   redis    Redis 7 (BullMQ queue)
+#   n8n      workflow orchestration (editor behind basic-auth via proxy)
+#
+# Postgres, Redis and n8n publish NO ports to the host — they are reachable
+# only inside the compose network (and n8n via the authenticated proxy).
+# Only the proxy binds 80/443.
+#
+# First-time setup:  cp .env.example .env  (or .env.production.example)
+#                    docker compose up -d --build
+#                    docker compose run --rm app npx prisma migrate deploy
+# Full guide: DEPLOY.md
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN must be set in .env (e.g. videos.example.com)}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-n8nadmin}
+      N8N_BASIC_AUTH_HASH: ${N8N_BASIC_AUTH_HASH:?N8N_BASIC_AUTH_HASH must be set — see docker/Caddyfile for how to generate it}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://pv:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/product_video
+      REDIS_URL: redis://redis:6379
+      ASSETS_DIR: /app/storage/jobs
+    # No published ports — traffic enters through `proxy` only.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - assets:/app/storage/jobs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://pv:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/product_video
+      REDIS_URL: redis://redis:6379
+      ASSETS_DIR: /app/storage/jobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - assets:/app/storage/jobs
+      - renders:/tmp/renders
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pv
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: product_video
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pv -d product_video"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published — reachable only inside the compose network.
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published — reachable only inside the compose network.
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:1-latest
+    environment:
+      N8N_HOST: n8n.${DOMAIN:?DOMAIN must be set in .env}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://n8n.${DOMAIN}/webhook/
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: pv
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set in .env (any long random string)}
+    volumes:
+      - n8ndata:/home/node/.n8n
+    # No published ports — the editor is served via the proxy at
+    # https://n8n.${DOMAIN} behind HTTP basic auth.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # NOTE on watchtower (deliberately NOT included):
+  # Unattended image updates can restart the worker mid-render and kill a
+  # job. Upgrades are manual and documented in OPS.md ("Upgrade procedure").
+
+volumes:
+  pgdata:      # Postgres data (jobs, research, evidence, reports)
+  redisdata:   # Redis AOF persistence (BullMQ queue survives restarts)
+  n8ndata:     # n8n workflows, credentials, encryption state
+  assets:      # Final MP4s, captions, per-job assets → /app/storage/jobs
+  renders:     # Worker scratch space (temp scene files, cleaned per job)
+  caddy_data:  # Let's Encrypt certificates
+  caddy_config:

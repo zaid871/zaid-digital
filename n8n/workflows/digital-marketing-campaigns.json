@@ -1,0 +1,96 @@
+{
+  "name": "digital-marketing-campaigns",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2,3,14,15 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cmp-schedule",
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/campaigns/tick",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 300000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "cmp-tick",
+      "name": "tick",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Campaign tick report: one line per campaign — what it decided and why.\nconst r = $input.first().json;\nconst results = (r && r.data && r.data.results) || [];\nconst lines = [];\nlines.push(`Campaign tick: ${results.length} active campaign(s)`);\nfor (const t of results) {\n  const d = t.decision || {};\n  lines.push(`- ${t.title}: ${d.action}${d.level ? ` (level ${d.level})` : ''} — ${t.note || d.reason || ''}`);\n}\nreturn [{ json: { ok: true, report: lines.join('\\n') } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "cmp-report",
+      "name": "report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "tick",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tick": {
+      "main": [
+        [
+          {
+            "node": "report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "errorWorkflow": "digital-error-recovery"
+}

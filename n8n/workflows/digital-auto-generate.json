@@ -1,0 +1,93 @@
+{
+  "name": "digital-auto-generate",
+  "pinData": {},
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 2 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "8876a174-eb1e-4c77-ab75-bc5a2ab5036f",
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/auto-generate/tick",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "a9cd3bc0-c1ab-44ef-a4f2-59ece7a52668",
+      "name": "tick",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nconst lines = [`Auto-generate ${d.week ?? ''} — ok: ${d.ok}, triggered: ${d.triggered ?? 0}, failed: ${d.failed ?? 0}, skipped: ${d.skipped ?? 0}`];\nfor (const f of (d.fires ?? [])) { lines.push(`  [${f.status}] ${f.kind} ${f.productType} -> ${f.webhook}${f.note ? ' (' + f.note + ')' : ''}`); }\nfor (const w of (d.warnings ?? [])) { lines.push(`  warning: ${w}`); }\nreturn [{ json: { report: lines.join('\\n') } }];"
+      },
+      "id": "314977a3-b475-486f-bee2-16a9cf00769a",
+      "name": "report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "tick",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tick": {
+      "main": [
+        [
+          {
+            "node": "report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "errorWorkflow": "digital-error-recovery"
+}

@@ -1,0 +1,318 @@
+{
+  "name": "digital: review-request",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "webhook-trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Delivery event in → 7 din wait → review ask email.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-review-ask"
+      }
+    },
+    {
+      "id": "validate",
+      "name": "validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst email = String(body.email ?? '').trim();\nif (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email))\n  return [{ json: { valid: false, error: 'valid email zaroori hai' } }];\nreturn [{ json: { valid: true, email,\n  productName: String(body.productName ?? 'hamara product').slice(0, 80),\n  reviewUrl: String(body.reviewUrl ?? '').slice(0, 300) } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        460
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "wait-7d",
+      "name": "wait-7d",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "amount": 7,
+        "unit": "days"
+      }
+    },
+    {
+      "id": "email-ask",
+      "name": "email-ask",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "notes": "Honest review ask — no incentive for 5 stars (fake-review guard).",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendBody": true,
+        "specifyBody": "json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{ $env.BREVO_API_KEY }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput",
+        "jsonBody": "={\"sender\":{\"email\":\"={{ $env.BREVO_SENDER_EMAIL }}\",\"name\":\"={{ $env.BREVO_SENDER_NAME }}\"},\"to\":[{\"email\":\"={{ $json.email }}\"}],\"subject\":\"{{ $json.productName }} kaisa laga? 1 minute ka review\",\"htmlContent\":\"Namaste,<br><br><b>{{ $json.productName }}</b> use karke kaisa laga? Tumhara honest review doosron ki madad karega:<br><a href=\\\"{{ $json.reviewUrl }}\\\">Review likho</a><br><br>Achha ya bura — jaisa hai waisa likho.\"}"
+      }
+    },
+    {
+      "id": "respond-done",
+      "name": "respond-done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true}"
+      }
+    },
+    {
+      "id": "webhook-callback",
+      "name": "webhook-callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        620
+      ],
+      "notes": "Buyer ka review yahan aata hai → backend record.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-review-callback"
+      }
+    },
+    {
+      "id": "validate-callback",
+      "name": "validate-callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        620
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst rating = Number(body.rating);\nif (!body.email || !body.product || !(rating >= 1 && rating <= 5) || !body.text)\n  return [{ json: { valid: false, error: 'email, product, rating 1-5, text zaroori' } }];\nreturn [{ json: { valid: true, review: {\n  email: String(body.email).slice(0, 120), product: String(body.product).slice(0, 80),\n  rating, text: String(body.text).slice(0, 500) } } }];\n"
+      }
+    },
+    {
+      "id": "record-review",
+      "name": "record-review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        620
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/reviews",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.review }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "respond-callback",
+      "name": "respond-callback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        620
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"thanks\":true}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-trigger": {
+      "main": [
+        [
+          {
+            "node": "validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "wait-7d",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-7d": {
+      "main": [
+        [
+          {
+            "node": "email-ask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email-ask": {
+      "main": [
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "webhook-callback": {
+      "main": [
+        [
+          {
+            "node": "validate-callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-callback": {
+      "main": [
+        [
+          {
+            "node": "record-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "record-review": {
+      "main": [
+        [
+          {
+            "node": "respond-callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Honest reviews only — no 5-star incentives, verified flag on evidence.",
+  "errorWorkflow": "digital-error-recovery"
+}

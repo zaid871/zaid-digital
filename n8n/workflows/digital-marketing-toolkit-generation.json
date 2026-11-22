@@ -1,0 +1,491 @@
+{
+  "name": "digital-marketing-toolkit-generation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-marketing-toolkit"
+      },
+      "id": "3fff8532-73c4-4095-bb87-1419f4b37c4d",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "3e34493d-4bb3-57a8-81d1-1a7edf631b86"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst productName = String(body.productName ?? '').trim();\nif (productName.length < 2) return [{ json: { valid: false, error: 'productName zaroori hai' } }];\nconst payload = { productName };\nfor (const k of ['productType','productDescription','features','audience','outcomes','niche','handle','theme','designStyle']) if (body[k] !== undefined) payload[k] = body[k];\nconst demandKey = String(body.niche ?? productName).trim();\nreturn [{ json: { valid: true, type: 'marketing_toolkit', payload, demandKey,\n  skipDemandCheck: body.skipDemandCheck === true, retries: 0 } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "72a5badb-99d5-4fe4-a166-a1808b5bcd42",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "9fdada0c-61a0-4d54-842c-bfbe77b4a877",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "9609a1f1-96e3-4a09-8652-c670ec4de01a",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/discovery/problem-miner/latest",
+        "options": {
+          "timeout": 15000
+        },
+        "onError": "continueRegularOutput",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "id": "f594d530-9ffc-48ef-91cc-6ede02659651",
+      "name": "check-demand",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demand pre-check (plan guardrail #1): match topic/niche against the\n// weekly Problem Miner top-10 (GET latest). Never blocks when the miner\n// never ran or is unreachable \u2014 proceeds with a warning instead.\nconst r = $input.first().json;\nconst v = $('validate-input').first().json;\nconst skip = v.skipDemandCheck === true;\nconst key = String(v.demandKey ?? '');\nif (skip) return [{ json: { demandOk: true, demandNote: 'demand_check_skipped',\n  payload: v.payload, retries: 0, type: v.type } }];\nconst data = (r && r.ok === true && r.data) ? r.data : null;\nif (!data) return [{ json: { demandOk: true, demandNote: 'demand_not_checked',\n  payload: v.payload, retries: 0, type: v.type } }];\nif (data.mined !== true) return [{ json: { demandOk: true, demandNote: 'not_mined_yet',\n  payload: v.payload, retries: 0, type: v.type } }];\nconst words = key.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4);\nconst problems = (data.problems ?? []).map(p => String(p.text ?? ''));\nconst hits = problems.filter(t => words.some(w => t.toLowerCase().includes(w)));\nif (hits.length) return [{ json: { demandOk: true, demandNote: 'demand_matched',\n  matched: hits.slice(0, 3), payload: v.payload, retries: 0, type: v.type } }];\nreturn [{ json: { demandOk: false, demandNote: 'no_demand_match',\n  hints: problems.slice(0, 3), payload: v.payload, retries: 0, type: v.type } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "d2acc3bd-7efc-48a2-ae4a-ea933def52b5",
+      "name": "match-demand",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.demandOk }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "3fd4160a-ca3d-4a99-9001-4fec9d1058c6",
+      "name": "if-demand",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json; return [{ json: { ok:false, code:'needs_validation', error:'Is topic/niche ke liye mined problems me koi match nahi mila \u2014 pehle demand validate karo ya skipDemandCheck:true bhejo.', hints: j.hints ?? [], demandNote: j.demandNote } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "03882382-07ec-4cfe-9233-e9700e7e5901",
+      "name": "build-needs-validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "21efbe64-f491-4c59-95ba-6b08444ae28a",
+      "name": "respond-needs-validation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/marketing-toolkits",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 300000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "4eadccd4-ddee-445f-a632-1a6be506ebc1",
+      "name": "call-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nlet prev = null;\ntry { prev = $('bump-retry').first().json; } catch {}\nif (!prev) { try { prev = $('match-demand').first().json; } catch {} }\nprev = prev ?? {};\nconst retries = Number(prev.retries ?? 0);\nconst code = (r && r.code) || '';\nconst retryable = ['generation_failed','unavailable','internal_error','timeout','mine_failed'].includes(code)\n  || (r && r.ok !== true && !r.data && !code);\nif (r && r.ok === true && r.data) {\n  const d = r.data;\n  return [{ json: { ok: true, type: 'marketing_toolkit', retries, demandNote: prev.demandNote ?? '',\n    payload: prev.payload ?? {},\n    productName: d.productName ?? '', slug: d.slug ?? '', dir: d.dir ?? '',\n    files: d.files ?? {}, warnings: d.warnings ?? [],\n    } }];\n}\nreturn [{ json: { ok: false, type: 'marketing_toolkit', retries, retryable,\n  demandNote: prev.demandNote ?? '', payload: prev.payload ?? {},\n  error: (r && (r.message ?? r.error)) || 'Generation failed', code: code || 'generation_failed' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "7bcc5651-611f-46bb-9a9e-4d853e007578",
+      "name": "normalize-result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "5ce49290-8a44-4232-be80-32c5233f0cd5",
+      "name": "check-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.retryable }}",
+              "value2": true
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{ $json.retries }}",
+              "value2": 1,
+              "operation": "smaller"
+            }
+          ]
+        }
+      },
+      "id": "ebc00dbb-96b1-49ea-af35-738c61e2821b",
+      "name": "is-retryable",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 60,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "id": "7a9e6c90-474f-4132-92b8-0c04f810d1ff",
+      "name": "wait-retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { payload: j.payload, retries: (Number(j.retries ?? 0) + 1),\n  demandNote: j.demandNote ?? '', type: j.type } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "34d3128b-3a59-42dc-ab1b-145a7a4a8e4e",
+      "name": "bump-retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "b1f4c51a-c160-4850-a4d6-a8f74d872033",
+      "name": "respond-success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "964a5960-37a8-47f1-a95c-8877175dd0d8",
+      "name": "respond-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "check-demand",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-demand": {
+      "main": [
+        [
+          {
+            "node": "match-demand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "match-demand": {
+      "main": [
+        [
+          {
+            "node": "if-demand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-demand": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-needs-validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-needs-validation": {
+      "main": [
+        [
+          {
+            "node": "respond-needs-validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-api": {
+      "main": [
+        [
+          {
+            "node": "normalize-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-result": {
+      "main": [
+        [
+          {
+            "node": "check-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-ok": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "is-retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-retryable": {
+      "main": [
+        [
+          {
+            "node": "wait-retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-retry": {
+      "main": [
+        [
+          {
+            "node": "bump-retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "bump-retry": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "errorWorkflow": "digital-error-recovery"
+}

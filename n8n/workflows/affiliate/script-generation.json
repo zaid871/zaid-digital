@@ -1,0 +1,289 @@
+{
+  "name": "affiliate-script-generation",
+  "description": "\u00a718.5 Script Generation: deterministic \u00a77 builder (hook\u2192intro\u2192features\u2192use case\u2192CTA+captions/hashtags) from verified facts only + compliance scan. No prices, no fake urgency, no guarantees.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product (VERIFIED)} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/script"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check-llm",
+      "name": "check-llm",
+      "notes": "LLM availability probe. Template engine always works; HF swap is TODO.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const hasHf = Boolean($env.HF_TOKEN);\nreturn [{ json: { llmAvailable: hasHf,\n  engine: hasHf ? 'hf-inference (TODO wire)' : 'template-v1 (deterministic)',\n  note: 'Template engine builds \u00a77 scripts ONLY from verified facts \u2014 nothing invented.' } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "build-script",
+      "name": "build-script",
+      "notes": "Deterministic \u00a77 script builder \u2014 uses ONLY verified facts, never invents claims. TODO: swap template-v1 for HF inference when wired.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst p = (wh.body ?? wh).product ?? {};\nconst facts = (p.facts ?? []).filter(f => f.claim && f.source);\nconst feat = facts.slice(0, 3).map(f => f.claim);\nconst name = p.name ?? 'yeh product';\n// \u00a77 structure: hook \u2192 intro \u2192 features \u2192 use case \u2192 explanation \u2192 CTA \u2192 caption/hashtags.\n// Rules: no prices, no fake urgency, no guarantees, neutral CTA.\nconst script = {\n  hook: `${name} \u2014 kya aapne iske baare mein suna hai?`,\n  intro: `${name} ${p.category ?? ''} mein ek useful option hai.`.trim(),\n  features: feat,\n  useCase: p.useCase ?? 'Rozmarra ke istemal ke liye banaya gaya hai.',\n  explanation: 'Neeche diye gaye link se aap iske baare mein aur jaan sakte hain.',\n  cta: 'View Product', // neutral CTA only (\u00a77); never 'buy now' pressure\n  caption: `${name} ke baare mein jaankari. #reels #productfinds`,\n  hashtags: ['#reels', '#productfinds', '#honestreview'],\n};\nreturn [{ json: { product: p, script, engine: 'template-v1 (deterministic)',\n  llmAvailable: $input.first().json.llmAvailable } }];"
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "compliance-scan",
+      "name": "compliance-scan",
+      "notes": "\u00a75/\u00a77/\u00a711 compliance scan: no prices, no fake urgency, no guarantees, no exaggerated claims.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst text = JSON.stringify(j.script);\nconst violations = [];\nif (/\u20b9|Rs\\.?\\s*\\d|\\$\\s*\\d|\\b\\d+\\s*%\\s*off\\b|\\bdiscount\\b|\\boffer\\b|\\bfree\\b/i.test(text))\n  violations.push('price_or_discount_mention');\nif (/limited\\s*time|hurry|only\\s+\\d+\\s+left|act\\s+now|jaldi\\s+karein/i.test(text))\n  violations.push('fake_urgency');\nif (/guaranteed|100%\\s+(sure|result)|pakka\\s+wada/i.test(text))\n  violations.push('false_guarantee');\nif (/best\\s+in\\s+the\\s+world|number\\s*one/i.test(text))\n  violations.push('exaggerated_claim');\nreturn [{ json: { ...j, violations, clean: violations.length === 0 } }];"
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-clean",
+      "name": "if-clean",
+      "notes": "Clean \u2192 SCRIPTED. Violations \u2192 NEEDS_REVIEW.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.clean }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-scripted",
+      "name": "mark-scripted",
+      "notes": "Sets state SCRIPTED (\u00a719).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { ...j.product, state: 'SCRIPTED',\n  scriptedAt: new Date().toISOString() }, script: j.script } }];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-visuals",
+      "name": "trigger-visuals",
+      "notes": "Forwards to AI visual generation (\u00a718.6).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/visuals",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, script: $json.script}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-scripted",
+      "name": "log-scripted",
+      "notes": "Script log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[script] SCRIPTED'); return [$input.first()];"
+      },
+      "position": [
+        1860,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-script",
+      "name": "park-script",
+      "notes": "Violations \u2192 NEEDS_REVIEW. Never auto-continues.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[script] NEEDS_REVIEW', $json.violations);\nreturn [{ json: { product: { ...$json.product, state: 'NEEDS_REVIEW' },\n  violations: $json.violations } }];"
+      },
+      "position": [
+        1420,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "check-llm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-llm": {
+      "main": [
+        [
+          {
+            "node": "build-script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-script": {
+      "main": [
+        [
+          {
+            "node": "compliance-scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compliance-scan": {
+      "main": [
+        [
+          {
+            "node": "if-clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-clean": {
+      "main": [
+        [
+          {
+            "node": "mark-scripted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-scripted": {
+      "main": [
+        [
+          {
+            "node": "trigger-visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-visuals": {
+      "main": [
+        [
+          {
+            "node": "log-scripted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL",
+    "HF_TOKEN"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

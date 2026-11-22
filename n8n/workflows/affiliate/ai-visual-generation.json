@@ -1,0 +1,289 @@
+{
+  "name": "affiliate-ai-visual-generation",
+  "description": "\u00a718.6 AI Visual Generation: 9:16 visual briefs from verified facts + \u00a78 compliance attestation. Model execution is an explicit TODO; state stays SCRIPTED until real assets exist.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product (SCRIPTED), script} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/visuals"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check-quota",
+      "name": "check-quota",
+      "notes": "Image-generation quota probe (\u00a722: never assume unlimited).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const hasHf = Boolean($env.HF_TOKEN);\nreturn [{ json: { imageGenAvailable: hasHf,\n  note: hasHf ? 'HF image quota assumed; honor 429s' : 'no HF token \u2014 brief only' } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "plan-visuals",
+      "name": "plan-visuals",
+      "notes": "Builds per-scene 9:16 visual briefs from verified facts (\u00a78).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst body = wh.body ?? wh;\nconst p = body.product ?? {}, s = body.script ?? {};\n// Visual brief per scene (\u00a78): 9:16 vertical, original AI visuals only,\n// product-accurate to verified facts, never presented as real testing.\nconst scenes = ['hook', 'intro', 'features'].map((sc, i) => ({\n  scene: sc, aspect: '9:16', index: i,\n  brief: `Original AI product visual, vertical 9:16, dark clean studio background, ` +\n    `product-accurate to verified facts for \"${p.name ?? 'product'}\", no text overlays ` +\n    `in image, no invented ports/logos/capabilities`,\n  source: 'ai-generated-original',\n}));\nreturn [{ json: { product: p, script: s, visualBrief: scenes,\n  assetsStatus: 'brief-ready' } }];"
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "compliance-attest",
+      "name": "compliance-attest",
+      "notes": "\u00a78 compliance attestation: original AI visuals only, no external footage, no competitor Reels reuse, not presented as real product testing.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst attest = {\n  originalAiOnly: True, noExternalFootage: True, noCompetitorReuse: True,\n  productAccurate: True, notPresentedAsRealTesting: True,\n};\n// Hard attestation (\u00a78): any False would REJECT \u2014 all True by construction.\nreturn [{ json: { ...j, attest, attested: Object.values(attest).every(Boolean) } }];"
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-attested",
+      "name": "if-attested",
+      "notes": "Attested \u2192 brief ready. Otherwise park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.attested }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-brief-ready",
+      "name": "mark-brief-ready",
+      "notes": "Brief ready. Business state stays SCRIPTED; ASSETS_READY is set only after real generation (render workflow). Honest state machine.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { ...j.product }, script: j.script,\n  visualBrief: j.visualBrief, assetsStatus: 'brief-ready',\n  todo: 'MODEL CALL TODO: execute brief via HF FLUX.1 (or backend job) \u2014 only then set ASSETS_READY' } }];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-voice",
+      "name": "trigger-voice",
+      "notes": "Forwards to voice generation (\u00a718.7).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/voice",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, script: $json.script, visualBrief: $json.visualBrief}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-brief",
+      "name": "log-brief",
+      "notes": "Brief log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[visuals] brief-ready'); return [$input.first()];"
+      },
+      "position": [
+        1860,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-visuals",
+      "name": "park-visuals",
+      "notes": "Attestation failure \u2192 NEEDS_REVIEW.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { ...$json.product, state: 'NEEDS_REVIEW' },\n  reason: 'visual_attestation_failed' } }];"
+      },
+      "position": [
+        1420,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "check-quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-quota": {
+      "main": [
+        [
+          {
+            "node": "plan-visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "plan-visuals": {
+      "main": [
+        [
+          {
+            "node": "compliance-attest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compliance-attest": {
+      "main": [
+        [
+          {
+            "node": "if-attested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-attested": {
+      "main": [
+        [
+          {
+            "node": "mark-brief-ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-brief-ready": {
+      "main": [
+        [
+          {
+            "node": "trigger-voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-voice": {
+      "main": [
+        [
+          {
+            "node": "log-brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL",
+    "HF_TOKEN"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

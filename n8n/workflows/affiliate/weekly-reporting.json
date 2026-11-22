@@ -1,0 +1,241 @@
+{
+  "name": "affiliate-weekly-reporting",
+  "description": "§18.14 Weekly Reporting: Monday 08:00 → performance report (§16) with observed (not proven) patterns → optional delivery.",
+  "nodes": [
+    {
+      "id": "schedule-weekly",
+      "name": "schedule-weekly",
+      "notes": "Weekly trigger Monday 08:00 Asia/Kolkata (n8n instance TZ must be Asia/Kolkata).",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "gather",
+      "name": "gather",
+      "notes": "Real weekly report (publish records + live insights + goal gaps + brain calibration).",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/reports/weekly",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "build-report",
+      "name": "build-report",
+      "notes": "Builds the weekly report (§16): observed patterns labeled as observed, never as proven; views never equated to sales.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst w = j.data ?? j;\n// §16/§17 rules: actual data only; views ≠ sales; patterns are OBSERVED,\n// never presented as proven; small controlled experiments only.\nconst report = {\n  week: w.week,\n  productsPublished: w.totals?.posts ?? 0,\n  totalViews: w.totals?.views ?? null,\n  totals: w.totals ?? null,\n  byChannel: w.byChannel ?? {},\n  topPosts: w.topPosts ?? [],\n  gaps: w.gaps ?? [],\n  calibration: w.calibration ?? null,\n  observedPatterns: [],\n  weakPatterns: [],\n  suggestedExperiments: [],\n  complianceNote: 'Factual and religious requirements never bypassed (§17).',\n  notes: w.notes ?? [],\n};\nreturn [{ json: { report } }];\n"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "report-configured",
+      "name": "report-configured",
+      "notes": "REPORT_WEBHOOK_URL set → deliver. Else log only.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $env.REPORT_WEBHOOK_URL }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "post-report",
+      "name": "post-report",
+      "notes": "Delivers the report to the configured channel.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.REPORT_WEBHOOK_URL }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.report) }}"
+      },
+      "position": [
+        980,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-report",
+      "name": "log-report",
+      "notes": "Report log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[weekly-report] done'); return [$input.first()];"
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "sweep-goals",
+      "name": "sweep-goals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        540,
+        480
+      ],
+      "notes": "Goal-loop sweep (affiliate technique, now shared): diagnoses gaps across ALL goals, affiliate + digital.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/goals/sweep",
+        "options": {
+          "timeout": 600000
+        },
+        "onError": "continueRegularOutput",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "schedule-weekly": {
+      "main": [
+        [
+          {
+            "node": "gather",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gather": {
+      "main": [
+        [
+          {
+            "node": "build-report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-report": {
+      "main": [
+        [
+          {
+            "node": "sweep-goals",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "report-configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "report-configured": {
+      "main": [
+        [
+          {
+            "node": "post-report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "post-report": {
+      "main": [
+        [
+          {
+            "node": "log-report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "REPORT_WEBHOOK_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

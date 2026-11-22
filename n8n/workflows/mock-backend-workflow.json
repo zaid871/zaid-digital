@@ -1,0 +1,168 @@
+{
+  "connections": {
+    "mock-create": {
+      "main": [
+        [
+          {
+            "node": "respond-created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mock-status": {
+      "main": [
+        [
+          {
+            "node": "respond-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "webhook-mock-create": {
+      "main": [
+        [
+          {
+            "node": "mock-create",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "webhook-mock-status": {
+      "main": [
+        [
+          {
+            "node": "mock-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "description": "TEST-ONLY mock of the backend API so the main workflow (product-video-main) can be run end-to-end inside n8n BEFORE the real backend is deployed. Import and ACTIVATE this workflow, then set the main workflow's BACKEND_URL env to https://<your-n8n-host>/webhook/mock (no trailing slash). The mock simulates job progress across polls: QUEUED -> RESEARCHING -> PLANNING -> GENERATING_ASSETS -> RENDERING -> COMPLETED (polls 1-5), so the main workflow's full validate -> create -> poll -> respond loop can be watched in ~100 seconds. HONEST LIMITS: no video is generated; the downloadUrl in the success response points at the mock and will not return a real MP4. It only proves the orchestration loop works.",
+  "errorWorkflow": "",
+  "name": "product-video-mock-backend",
+  "nodes": [
+    {
+      "id": "webhook-mock-create",
+      "name": "webhook-mock-create",
+      "notes": "POST {BACK}/api/v1/jobs \u2014 mimics the real job-creation endpoint. Returns { ok: true, data: { id, status: 'QUEUED' } } and resets the poll counter.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "mock/api/v1/jobs"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "051fb2da-2ff0-550b-ad07-c4cf72584d85"
+    },
+    {
+      "id": "mock-create",
+      "name": "mock-create",
+      "notes": "Mints a fake job id, resets the per-workflow poll counter in static data.",
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst body = item.body ?? item;\nconst staticData = $getWorkflowStaticData('global');\nstaticData.pollCount = 0;\nconst id = 'mock-' + Math.random().toString(36).slice(2, 10);\nstaticData.jobId = id;\nstaticData.productUrl = String(body.productUrl ?? '');\nstaticData.createdAt = new Date().toISOString();\nreturn [{ json: { ok: true, data: { id, status: 'QUEUED', productUrl: staticData.productUrl, language: body.language ?? 'hinglish', voice: body.voice ?? 'hi-IN-SwaraNeural', visualStyle: body.visualStyle ?? 'premium_dark', durationSeconds: Number(body.durationSeconds ?? 15), createdAt: staticData.createdAt, mock: true } } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        340,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-created",
+      "name": "respond-created",
+      "notes": "Returns HTTP 200 with the fake job record.",
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        580,
+        300
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "id": "webhook-mock-status",
+      "name": "webhook-mock-status",
+      "notes": "GET {BACK}/api/v1/jobs/:jobId \u2014 mimics the real status endpoint. Each call advances the fake pipeline so the main workflow's poll loop can be watched: poll 1 QUEUED, poll 2 RESEARCHING, poll 3 PLANNING, poll 4 GENERATING_ASSETS, poll 5 RENDERING, poll 6+ COMPLETED.",
+      "parameters": {
+        "httpMethod": "GET",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "mock/api/v1/jobs/:jobId"
+      },
+      "position": [
+        100,
+        560
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "eef09bfa-09b3-5ce7-877f-61ccb67f86e5"
+    },
+    {
+      "id": "mock-status",
+      "name": "mock-status",
+      "notes": "Counts polls in workflow static data and returns the matching fake job state with 15 stage rows, mirroring the real backend's status vocabulary.",
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.pollCount = (staticData.pollCount ?? 0) + 1;\nconst n = staticData.pollCount;\nconst jobId = staticData.jobId ?? 'mock-unknown';\nconst STAGES = [\n  { key: 'url_validation', label: 'URL validation' },\n  { key: 'product_extraction', label: 'Product extraction' },\n  { key: 'product_research', label: 'Product research' },\n  { key: 'fact_verification', label: 'Fact verification' },\n  { key: 'media_analysis', label: 'Media analysis' },\n  { key: 'compliance_review', label: 'Compliance review' },\n  { key: 'creative_planning', label: 'Creative planning' },\n  { key: 'script_generation', label: 'Script generation' },\n  { key: 'voiceover_generation', label: 'Voiceover generation' },\n  { key: 'storyboard_generation', label: 'Storyboard generation' },\n  { key: 'ai_visual_generation', label: 'AI visual generation' },\n  { key: 'ai_video_generation', label: 'AI video generation' },\n  { key: 'editing_rendering', label: 'Editing and rendering' },\n  { key: 'quality_assurance', label: 'Quality assurance' },\n  { key: 'final_delivery', label: 'Final delivery' }\n];\nconst PLAN = [\n  { status: 'QUEUED', done: 0 },\n  { status: 'RESEARCHING', done: 5 },\n  { status: 'PLANNING', done: 8 },\n  { status: 'GENERATING_ASSETS', done: 11 },\n  { status: 'RENDERING', done: 13 },\n  { status: 'COMPLETED', done: 15 }\n];\nconst step = PLAN[Math.min(n - 1, PLAN.length - 1)];\nconst stages = STAGES.map((s, i) => ({\n  stageKey: s.key,\n  key: s.key,\n  label: s.label,\n  status: i < step.done ? 'succeeded' : (i === step.done && step.done < 15 ? 'running' : 'pending')\n}));\nreturn [{ json: { ok: true, data: { id: jobId, status: step.status, productUrl: staticData.productUrl ?? '', poll: n, progress: { done: step.done, total: STAGES.length }, stages, mock: true, note: 'Mock backend \u2014 no real video is generated. The downloadUrl in the main workflow response is illustrative only.' } } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        340,
+        560
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "respond-status",
+      "name": "respond-status",
+      "notes": "Returns HTTP 200 with the fake job status.",
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "position": [
+        580,
+        560
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    }
+  ],
+  "tags": [
+    {
+      "name": "product-video"
+    },
+    {
+      "name": "mock"
+    },
+    {
+      "name": "testing"
+    }
+  ]
+}

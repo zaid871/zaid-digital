@@ -1,0 +1,561 @@
+{
+  "name": "digital-facebook-publishing",
+  "description": "Digital products Facebook Publishing (same setup as affiliate FB publishing, kept separate): Page/token verification -> upload Reel -> save FB publication record separately from IG. Description is the product's own caption (no affiliate disclosure).",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product, downloadUrl} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "digital/facebook"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (§21).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "best-time-gate",
+      "name": "best-time-gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Best-time gate: publish inside IST peak windows (07:00-09:00, 19:00-22:00)\n// unless payload body.forcePublish === true. Mirrors\n// src/lib/publishing/best-time.ts (slots 07:30, 08:30, 19:30, 20:30 IST).\nconst item = $input.first().json;\nconst body = item.body ?? {};\nconst forced = body.forcePublish === true;\nconst istNow = new Date(Date.now() + (5 * 60 + 30) * 60000);\nconst mins = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();\nconst peak = (mins >= 420 && mins < 540) || (mins >= 1140 && mins < 1320);\nconst slots = [450, 510, 1170, 1230];\nconst next = slots.find((s) => s > mins);\nconst fmt = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0') + ' IST';\nconst nextSlotIst = next === undefined ? '07:30 IST (tomorrow)' : fmt(next);\nreturn [{ json: { ...item, bestTime: { peakNow: peak || forced, forced, nextSlotIst } } }];"
+      }
+    },
+    {
+      "id": "if-peak-time",
+      "name": "if-peak-time",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        760,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.bestTime.peakNow }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "park-deferred",
+      "name": "park-deferred",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'DEFERRED' },\n  reason: 'outside_peak_window',\n  nextSlotIst: $json.bestTime ? $json.bestTime.nextSlotIst : null,\n  note: 'Publish at the next IST peak slot (07:30 / 08:30 / 19:30 / 20:30), or re-trigger with forcePublish=true' } }];"
+      }
+    },
+    {
+      "id": "verify-page",
+      "name": "verify-page",
+      "notes": "Verifies the FB Page + page token before any upload (§14). Fails safe.",
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.facebook.com/v26.0/{{ $('resolve-account').first().json.data.fbPageId }}?fields=id,name&access_token={{ $('resolve-account').first().json.data.fbPageToken }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "classify-page",
+      "name": "classify-page",
+      "notes": "Page/token verdict.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst ok = Boolean(j.id);\nreturn [{ json: { pageOk: ok, pageId: j.id ?? null, pageName: j.name ?? null } }];"
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-page-ok",
+      "name": "if-page-ok",
+      "notes": "Page ok → upload. Else NEEDS_REVIEW.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.pageOk }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1420,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "park-fb",
+      "name": "park-fb",
+      "notes": "Page verification failed → NEEDS_REVIEW.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'NEEDS_REVIEW' },\n  reason: 'fb_page_verification_failed' } }];"
+      },
+      "position": [
+        1640,
+        480
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-uploaded",
+      "name": "if-uploaded",
+      "notes": "Finish returned success=true → save FB record. Else park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1860,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "save-fb-id",
+      "name": "save-fb-id",
+      "notes": "Saves FB publication record SEPARATELY from IG (§14, §19).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json; const p = (wh.body ?? wh).product ?? {};\nconst fbId = $('fb-reel-start').first().json.video_id;\nreturn [{ json: { product: { ...p, state: 'PUBLISHED',\n  publications: { ...(p.publications ?? {}),\n    facebook: { mediaId: fbId, publishedAt: new Date().toISOString() } } } } }];"
+      },
+      "position": [
+        2240,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-fb",
+      "name": "log-fb",
+      "notes": "FB publish log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[facebook] published'); return [$input.first()];"
+      },
+      "position": [
+        2440,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-fb-upload",
+      "name": "park-fb-upload",
+      "notes": "Upload failed → NEEDS_REVIEW (safe retry).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'NEEDS_REVIEW' },\n  reason: 'fb_upload_failed' } }];"
+      },
+      "position": [
+        2080,
+        280
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "fb-reel-start",
+      "name": "fb-reel-start",
+      "notes": "FB Reel 1/3: start upload session on /video_reels (Graph API v26.0). Returns video_id + upload_url.",
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/{{ $('resolve-account').first().json.data.fbPageId }}/video_reels",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ upload_phase: 'start', access_token: $('resolve-account').first().json.data.fbPageToken }) }}"
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fb-reel-upload",
+      "name": "fb-reel-upload",
+      "notes": "FB Reel 2/3: send the rendered MP4 by URL to the rupload host. Auth scheme here is 'OAuth', NOT Bearer.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('fb-reel-start').first().json.upload_url }}",
+        "options": {
+          "timeout": 180000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'OAuth ' + $('resolve-account').first().json.data.fbPageToken }}"
+            },
+            {
+              "name": "file_url",
+              "value": "={{ $('webhook-entry').first().json.body.downloadUrl }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1840,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fb-reel-finish",
+      "name": "fb-reel-finish",
+      "notes": "FB Reel 3/3: publish with video_state=PUBLISHED. Response is {success:true} (no id field).",
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/{{ $('resolve-account').first().json.data.fbPageId }}/video_reels",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ upload_phase: 'finish', video_id: $('fb-reel-start').first().json.video_id, video_state: 'PUBLISHED', description: (($('webhook-entry').first().json.body.product.script.caption ?? '')), access_token: $('resolve-account').first().json.data.fbPageToken }) }}"
+      },
+      "position": [
+        2040,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fb-setup-notes",
+      "name": "fb-setup-notes",
+      "parameters": {
+        "content": "## FB Reel setup (§14) — verified 2026-10-21 against 2026 Graph API guides\n1. **Permissions** on your Meta app: `pages_manage_posts` (needs `pages_read_engagement` + `pages_show_list`).\n2. **Own Page only → Development mode is enough.** You are app admin/tester AND Page admin, so no app review and no business verification needed (same logic as IG own-account dev mode). App review + verification only apply when publishing for other people's Pages.\n3. **Token:** short user token (1h) → exchange for long-lived user token (60 days) → `GET /me/accounts` → copy the Page token into `FB_PAGE_TOKEN`. The Page token itself does not expire; re-fetch it whenever you refresh the 60-day user token. Error code 190 = token expired → re-run this flow.\n4. **Reels edge:** `/video_reels` 3-step flow (start → rupload bytes/file_url with header `Authorization: OAuth`, NOT Bearer → finish `video_state=PUBLISHED`). The old `/videos` edge posts a regular feed video, NOT a Reel.\n5. **Reel specs:** 9:16 MP4, ≥540×960, H.264+AAC; duration 3s–90s per one guide, up to 20 min per another — our 15s / 30–60s renders fit either way.\nCaveat: secondary 2026 guides, not Meta's own docs — live-verify at Phase 7.",
+        "height": 460,
+        "width": 1180,
+        "color": 4
+      },
+      "position": [
+        980,
+        -120
+      ],
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1
+    },
+    {
+      "id": "record-publish",
+      "name": "record-publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2680,
+        40
+      ],
+      "notes": "Record the publish in the backend so the repost monitor can track performance. Best-effort: never fails the publish.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/records",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ platform: 'facebook_reels', platformMediaId: $('save-fb-id').first().json.product.publications.facebook.mediaId, videoUrl: $('webhook-entry').first().json.body.downloadUrl, caption: $('webhook-entry').first().json.body.product.script.caption, publishedAt: new Date().toISOString(), jobId: $('webhook-entry').first().json.body.jobId }) }}"
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/resolve-account",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ productType: ($('webhook-entry').first().json.body.product || {}).productType, niche: ($('webhook-entry').first().json.body.product || {}).niche, accountKey: $('webhook-entry').first().json.body.accountKey }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "resolve-account",
+      "name": "resolve-account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        870,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "best-time-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "verify-page": {
+      "main": [
+        [
+          {
+            "node": "classify-page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "classify-page": {
+      "main": [
+        [
+          {
+            "node": "if-page-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-page-ok": {
+      "main": [
+        [
+          {
+            "node": "fb-reel-start",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-fb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-uploaded": {
+      "main": [
+        [
+          {
+            "node": "save-fb-id",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-fb-upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save-fb-id": {
+      "main": [
+        [
+          {
+            "node": "log-fb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "best-time-gate": {
+      "main": [
+        [
+          {
+            "node": "if-peak-time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-peak-time": {
+      "main": [
+        [
+          {
+            "node": "resolve-account",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-deferred",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fb-reel-start": {
+      "main": [
+        [
+          {
+            "node": "fb-reel-upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fb-reel-upload": {
+      "main": [
+        [
+          {
+            "node": "fb-reel-finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fb-reel-finish": {
+      "main": [
+        [
+          {
+            "node": "if-uploaded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log-fb": {
+      "main": [
+        [
+          {
+            "node": "record-publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "resolve-account": {
+      "main": [
+        [
+          {
+            "node": "verify-page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL",
+    "FB_PAGE_ID",
+    "FB_PAGE_TOKEN"
+  ],
+  "tags": [],
+  "errorWorkflow": "digital-error-recovery"
+}

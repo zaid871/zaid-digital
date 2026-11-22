@@ -1,0 +1,13 @@
+# Diffusers MUST come from git main — the stable PyPI release does not have
+# Wan2.2 support yet (per the Wan-AI model card).
+git+https://github.com/huggingface/diffusers
+gradio>=4.0
+torch>=2.4.0
+transformers>=4.49.0
+accelerate>=0.34.0
+sentencepiece
+safetensors
+imageio
+imageio-ffmpeg
+numpy
+Pillow

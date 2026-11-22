@@ -1,0 +1,1215 @@
+{
+  "name": "digital-ads-marketing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-ads-marketing"
+      },
+      "id": "bf970565-3da4-43b3-99e0-6931dac6fd58",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "54210535-f923-529a-bcfb-43c662019896"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\n\nconst productType = String(body.productType ?? '');\nif (!['ebook','template_pack','pod','website'].includes(productType))\n  return [{ json: { valid: false, error: 'productType ebook | template_pack | pod | website hona chahiye' } }];\nconst productName = String(body.productName ?? '').trim();\nif (productName.length < 3)\n  return [{ json: { valid: false, error: 'productName (min 3 chars) zaroori hai' } }];\nconst productLink = String(body.productLink ?? '').trim();\nif (!/^https?:\\/\\/.+/.test(productLink))\n  return [{ json: { valid: false, error: 'productLink valid http(s) URL hona chahiye' } }];\nconst durationSeconds = Math.min(180, Math.max(15, Number(body.durationSeconds ?? 45) || 45));\nreturn [{ json: { valid: true, productType, productName, productLink,\n  productDescription: String(body.productDescription ?? '').slice(0, 1000),\n  features: Array.isArray(body.features) ? body.features.slice(0, 8).map(String) : [],\n  durationSeconds, publish: body.publish !== false,\n  niche: body.niche !== undefined ? String(body.niche).slice(0, 100) : undefined,\n  subreddit: typeof body.subreddit === 'string' && body.subreddit.trim() ? body.subreddit.trim().slice(0, 100) : undefined,\n  platforms: Array.isArray(body.platforms) ? body.platforms.filter(p => ['pinterest','linkedin','x','reddit','quora','threads'].includes(p)) : undefined,\n  question: typeof body.question === 'string' && body.question.trim() ? body.question.trim().slice(0, 500) : undefined } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "6defd2d0-9854-4e26-83bd-af4301f92ac8",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "b1212a09-9a3a-4d88-9d1b-dc9871cddc9b",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "d3c5d890-a304-4b2f-9f6e-a6f2eccf5e07",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ productUrl: $json.productLink, durationSeconds: $json.durationSeconds, language: 'hinglish', visualStyle: 'premium_dark', scriptStyle: 'numbered', platform: 'instagram_reels', idempotencyKey: 'digital-ad-' + $json.productType + '-' + Date.now() }) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "0d86cf91-e580-4f0d-858f-92d600137ae3",
+      "name": "create-ad-job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst prev = $('validate-input').first().json;\nif (r && r.ok === true && r.data && r.data.id) {\n  return [{ json: { ok: true, jobId: r.data.id,\n    productType: prev.productType, productName: prev.productName, productLink: prev.productLink,\n    productDescription: prev.productDescription, features: prev.features,\n    publish: prev.publish, platforms: prev.platforms, subreddit: prev.subreddit, question: prev.question } }];\n}\nreturn [{ json: { ok: false,\n  error: (r && (r.message ?? r.error)) || 'Ad job creation failed',\n  code: (r && r.code) || 'job_create_failed' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "70630ca7-3b45-4593-8ec9-3d1833cff94d",
+      "name": "parse-job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "33be440b-9e76-4a24-a499-032a6e779ffa",
+      "name": "job-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "8a9aee84-61b5-44c7-929b-36fa5627c474",
+      "name": "fail-create",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "44fe0238-3cf6-4382-b682-76334cee2ab1",
+      "name": "respond-create-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { jobId: j.jobId, attempts: 0,\n  productType: j.productType, productName: j.productName, productLink: j.productLink,\n  productDescription: j.productDescription, features: j.features,\n  publish: j.publish, platforms: j.platforms, subreddit: j.subreddit, question: j.question } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "212729a2-ab0c-4655-a1df-636a5e81c7eb",
+      "name": "init-poll",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ $json.jobId }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "8e23b09e-2677-4454-a748-a296470754bc",
+      "name": "get-status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst prev = $('init-poll').first().json;\nconst job = res.data ?? {};\nreturn [{ json: { jobId: prev.jobId, attempts: prev.attempts + 1,\n  status: job.status ?? 'UNKNOWN',\n  productType: prev.productType, productName: prev.productName, productLink: prev.productLink,\n  productDescription: prev.productDescription, features: prev.features,\n  publish: prev.publish, platforms: prev.platforms, subreddit: prev.subreddit, question: prev.question } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "fb5754e4-17fc-4594-9e55-0a133f7ec583",
+      "name": "normalize-status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "regex",
+              "value1": "={{ $json.status }}",
+              "value2": "^(COMPLETED|FAILED|CANCELLED|WAITING_FOR_REVIEW)$"
+            }
+          ]
+        }
+      },
+      "id": "564c88e9-ebe0-40fd-bfaf-6ad42aa3e633",
+      "name": "is-done",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.attempts }}",
+              "value2": 120,
+              "operation": "smallerEqual"
+            }
+          ]
+        }
+      },
+      "id": "54cfd063-8719-4009-af71-097ba66f5c40",
+      "name": "within-limit",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 20,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "id": "d3a85a1b-c9ee-418f-bc28-cd6f3c29ef8e",
+      "name": "wait-poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2220,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json; return [{ json: { ok:false, code:'poll_timeout', error:'Ad video job 40 min me complete nahi hua', jobId: j.jobId } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "43556175-c0cf-44e0-bc8f-f935de1307be",
+      "name": "build-timeout",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 504
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "47758f31-cab3-4954-80e9-df623331e2b9",
+      "name": "respond-timeout",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2660,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "COMPLETED"
+            }
+          ]
+        }
+      },
+      "id": "ff0fe57a-fe56-4775-b3ca-cf7813fc8c0f",
+      "name": "is-completed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2220,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "WAITING_FOR_REVIEW"
+            }
+          ]
+        }
+      },
+      "id": "21a00d34-b39c-4798-a788-0c9b87953510",
+      "name": "is-review",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2440,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json; return [{ json: { ok:false, code:'job_failed', error:'Ad video job failed: '+j.status, jobId: j.jobId, status: j.status } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "d835e1c5-3967-4276-bcd8-d76e51355a70",
+      "name": "build-failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "f66cefab-1f77-4616-8771-414b103cab74",
+      "name": "respond-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2660,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json; return [{ json: { ok:true, needsReview:true, jobId: j.jobId, status: j.status, note:'Ad video NEEDS_REVIEW \u2014 dashboard me approve karo, phir workflow dobara chalao' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "92e013cf-0f08-4044-a080-045a7c0bf455",
+      "name": "build-review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "29b7b015-a15f-4da9-9d7d-ceca56092f5b",
+      "name": "respond-review",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $('build-reels-payload').first().json;\nif (j.publish === false) return [{ json: { ...j, publishSkipped: true } }];\nconst category = { ebook: 'ebook', template_pack: 'templates', pod: 'apparel', website: 'website' }[j.productType] || 'digital';\nconst product = { name: j.productName, category, link: j.productLink };\nif (j.productDescription) product.description = j.productDescription;\nif (j.features && j.features.length) product.features = j.features;\nconst out = { ...j, publishPayload: { product } };\nif (j.platforms && j.platforms.length) out.publishPayload.platforms = j.platforms;\nif (j.subreddit) out.publishPayload.subreddit = j.subreddit;\nif (j.question) out.publishPayload.question = j.question;\nreturn [{ json: out }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "b7c40f5f-42aa-4ffe-b019-b3e780788d75",
+      "name": "build-publish-payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/multi-publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.publishPayload) }}",
+        "options": {
+          "timeout": 60000
+        },
+        "onError": "continueRegularOutput",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "id": "d15062a7-8862-4337-8e54-2aac5e510724",
+      "name": "call-multi-publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $('build-reels-payload').first().json;\nconst pub = $('call-multi-publish').first().json;\nconst results = pub && pub.data ? (pub.data.results ?? pub.data) : null;\nreturn [{ json: { ok: true, productType: j.productType, productName: j.productName,\n  jobId: j.jobId, jobStatus: j.status,\n  reelsReady: !!j.reelsReady, reelsReason: j.reelsReason ?? null,\n  reelsTriggered: { instagram: !!j.reelsReady, facebook: !!j.reelsReady },\n  publishSkipped: !!j.publishSkipped, publish: results } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "8f577c32-ed54-4546-afba-fea24ec2730b",
+      "name": "build-success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "1a82fea1-5919-40e6-9997-269c0c2df639",
+      "name": "respond-success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3100,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ $json.jobId }}/result",
+        "options": {
+          "timeout": 15000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "7fdec888-aabc-4bd5-b377-32b9c0156c68",
+      "name": "get-result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        -340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the IG/FB reels payload from the completed job.\n// downloadUrl comes from GET /api/v1/jobs/:id/result (video.downloadUrl is\n// a relative signed path /api/v1/jobs/:id/download?key=... \u2014 the bare\n// /download URL without ?key= returns 400, so never use that).\n// Caption is built from the product's own fields: no price, no fake claims.\nconst res = $input.first().json;\nconst p = $('normalize-status').first().json;\nif (p.publish === false) return [{ json: { ...p, reelsReady: false, reelsReason: 'publish_disabled' } }];\nconst base = String($env.BACKEND_URL ?? '').replace(/\\/$/, '');\nconst video = res && res.ok === true && res.data ? res.data.video : null;\nconst rel = video && video.downloadUrl ? String(video.downloadUrl) : '';\nlet caption = p.productName || '';\nif (p.productDescription) caption += '\\n\\n' + p.productDescription;\nconst feats = Array.isArray(p.features) ? p.features.slice(0, 3) : [];\nif (feats.length) caption += '\\n' + feats.map(f => '\u2713 ' + f).join('\\n');\ncaption += '\\n\\nDetails: ' + p.productLink;\nif (!rel) return [{ json: { ...p, reelsReady: false, reelsReason: 'no_video_url' } }];\nreturn [{ json: { ...p, reelsReady: true, downloadUrl: base + rel,\n  product: { name: p.productName, link: p.productLink, productType: p.productType, niche: p.niche, script: { caption } } } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "cff13c33-0261-473b-9137-5e21705d9493",
+      "name": "build-reels-payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        -340
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.reelsReady }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "6645e01b-a258-4759-a261-9851553a24c7",
+      "name": "if-reels-ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        -340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/digital/instagram",
+        "options": {
+          "timeout": 15000
+        },
+        "onError": "continueRegularOutput",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, downloadUrl: $json.downloadUrl, jobId: $json.jobId}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "id": "1e97173f-88fd-4ebe-8e09-c5d7c08184c4",
+      "name": "trigger-ig",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3100,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/digital/facebook",
+        "options": {
+          "timeout": 15000
+        },
+        "onError": "continueRegularOutput",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $('build-reels-payload').first().json.product, downloadUrl: $('build-reels-payload').first().json.downloadUrl, jobId: $('build-reels-payload').first().json.jobId}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "id": "87fffa91-1890-44bc-b394-a9003bf07df6",
+      "name": "trigger-fb",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3320,
+        -420
+      ]
+    },
+    {
+      "id": "link-check",
+      "name": "link-check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        550,
+        300
+      ],
+      "notes": "Link validation (affiliate technique): dead product link = invalid input.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/validate-link",
+        "options": {
+          "timeout": 30000
+        },
+        "onError": "continueRegularOutput",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.productLink }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-link-ok",
+      "name": "if-link-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        770,
+        300
+      ],
+      "notes": "Reachable link -> create the ad job; else invalid input.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($json.data ?? $json).reachable }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build-link-error",
+      "name": "build-link-error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        990,
+        480
+      ],
+      "notes": "Formats the dead-link error for respond-invalid (400).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nreturn [{ json: { valid: false, error: 'productLink reachable nahi hai \u2014 link check karo aur dobara bhejo' + (d.note ? ' (' + d.note + ')' : '') } }];"
+      }
+    },
+    {
+      "id": "qc-check",
+      "name": "qc-check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2990,
+        -340
+      ],
+      "notes": "Standalone QC gate (affiliate technique): job + caption + link check before any publish.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/qc-check",
+        "options": {
+          "timeout": 30000
+        },
+        "onError": "continueRegularOutput",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jobId: $json.jobId, caption: $json.product.script.caption, productLink: $json.productLink }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-qc-pass",
+      "name": "if-qc-pass",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        3210,
+        -340
+      ],
+      "notes": "QC pass -> publish; else route to review/fail.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ ($json.data ?? $json).verdict }}",
+              "value2": "pass"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-qc-review",
+      "name": "if-qc-review",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        3430,
+        -340
+      ],
+      "notes": "QC review -> needsReview; anything else is a fail.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ ($json.data ?? $json).verdict }}",
+              "value2": "review"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build-qc-review",
+      "name": "build-qc-review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3650,
+        -420
+      ],
+      "notes": "Formats a QC review into the needsReview response.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst q = r.data ?? r;\nconst p = $('build-reels-payload').first().json;\nconst failed = (q.checks ?? []).filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`).join('; ');\nreturn [{ json: { ok: true, needsReview: true, jobId: p.jobId, status: 'QC_REVIEW', note: 'QC review \u2014 ' + failed + ' \u2014 dashboard me approve karo, phir workflow dobara chalao' } }];"
+      }
+    },
+    {
+      "id": "build-qc-failed",
+      "name": "build-qc-failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3650,
+        -180
+      ],
+      "notes": "Formats a QC failure into the 502 response.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst q = r.data ?? r;\nconst p = $('build-reels-payload').first().json;\nconst failed = (q.checks ?? []).filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`).join('; ');\nreturn [{ json: { ok: false, code: 'qc_failed', error: 'QC fail \u2014 ' + failed, jobId: p.jobId, status: 'QC_FAILED' } }];"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "link-check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create-ad-job": {
+      "main": [
+        [
+          {
+            "node": "parse-job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "parse-job": {
+      "main": [
+        [
+          {
+            "node": "job-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "job-ok": {
+      "main": [
+        [
+          {
+            "node": "init-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "fail-create",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fail-create": {
+      "main": [
+        [
+          {
+            "node": "respond-create-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "init-poll": {
+      "main": [
+        [
+          {
+            "node": "get-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-status": {
+      "main": [
+        [
+          {
+            "node": "normalize-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-status": {
+      "main": [
+        [
+          {
+            "node": "is-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-done": {
+      "main": [
+        [
+          {
+            "node": "is-completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "within-limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "within-limit": {
+      "main": [
+        [
+          {
+            "node": "wait-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-poll": {
+      "main": [
+        [
+          {
+            "node": "get-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-timeout": {
+      "main": [
+        [
+          {
+            "node": "respond-timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-completed": {
+      "main": [
+        [
+          {
+            "node": "get-result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "is-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-review": {
+      "main": [
+        [
+          {
+            "node": "build-review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-review": {
+      "main": [
+        [
+          {
+            "node": "respond-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-failed": {
+      "main": [
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-publish-payload": {
+      "main": [
+        [
+          {
+            "node": "call-multi-publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-multi-publish": {
+      "main": [
+        [
+          {
+            "node": "build-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-success": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-result": {
+      "main": [
+        [
+          {
+            "node": "build-reels-payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-reels-payload": {
+      "main": [
+        [
+          {
+            "node": "if-reels-ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-reels-ready": {
+      "main": [
+        [
+          {
+            "node": "qc-check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-publish-payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-ig": {
+      "main": [
+        [
+          {
+            "node": "trigger-fb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-fb": {
+      "main": [
+        [
+          {
+            "node": "build-publish-payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "link-check": {
+      "main": [
+        [
+          {
+            "node": "if-link-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-link-ok": {
+      "main": [
+        [
+          {
+            "node": "create-ad-job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-link-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-link-error": {
+      "main": [
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "qc-check": {
+      "main": [
+        [
+          {
+            "node": "if-qc-pass",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-qc-pass": {
+      "main": [
+        [
+          {
+            "node": "trigger-ig",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "if-qc-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-qc-review": {
+      "main": [
+        [
+          {
+            "node": "build-qc-review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-qc-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-qc-review": {
+      "main": [
+        [
+          {
+            "node": "respond-review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-qc-failed": {
+      "main": [
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "errorWorkflow": "digital-error-recovery"
+}

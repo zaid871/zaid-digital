@@ -1,0 +1,93 @@
+{
+  "connections": {
+    "classify-error": {
+      "main": [
+        [
+          {
+            "node": "log-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "error-trigger": {
+      "main": [
+        [
+          {
+            "node": "classify-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "description": "Error-handling workflow for product-video-main (v2). Attached as the error workflow of the main workflow. Handles unexpected node crashes: classifies retryable vs permanent and emits a structured log entry. Expected job outcomes (COMPLETED / FAILED / WAITING_FOR_REVIEW / timeout) are already returned to the caller by the main workflow's Respond nodes — this workflow only fires on unexpected execution errors. Never loops back into the main workflow.",
+  "errorWorkflow": null,
+  "name": "product-video-errors",
+  "nodes": [
+    {
+      "id": "error-trigger",
+      "name": "error-trigger",
+      "notes": "Receives the failed execution context: workflow name, node, and error message.",
+      "parameters": {},
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1
+    },
+    {
+      "id": "classify-error",
+      "name": "classify-error",
+      "notes": "Classify as retryable (429, 5xx, timeouts, provider overload, network) vs permanent (auth, validation, bad secret). Retryable → safe to re-POST the webhook with the same idempotencyKey (backend dedupes). Permanent → fix input/config first.",
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst msg = String(err.message ?? err.error ?? '');\nconst retryable = /timeout|timed out|429|rate limit|5\\d\\d|ECONN|ENOTFOUND|EAI_AGAIN|socket|overload|queue|temporarily/i.test(msg);\nconst permanent = /unauthor|forbidden|validation|invalid|not allowed|bad webhook secret|N8N_WEBHOOK_SECRET/i.test(msg);\nreturn [{ json: {\n  message: msg.slice(0, 500),\n  retryable,\n  permanent,\n  workflow: (err.workflow && err.workflow.name) || 'product-video-main',\n  node: (err.execution && err.execution.lastNodeExecuted) || (err.node && err.node.name) || 'unknown',\n  hint: retryable ? 'Retryable — re-POST the webhook with the same idempotencyKey (backend dedupes).' : permanent ? 'Permanent — fix the input or config, then retry.' : 'Unclassified — check the n8n execution log.'\n} }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        300,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-error",
+      "name": "log-error",
+      "notes": "Structured error record. Wire this to your own alert channel (email/Telegram/webhook) if you want push notifications — intentionally left as a Code node so no fake endpoint is called.",
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconsole.error('[product-video-errors]', JSON.stringify(e));\nreturn [{ json: { logged: true, at: new Date().toISOString(), ...e } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        500,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET"
+  ],
+  "safety": [
+    "No infinite loops: error workflow never triggers itself or the main workflow.",
+    "Secrets only in n8n env / credential store, never in node parameters.",
+    "Idempotent retries via idempotencyKey on POST /api/v1/jobs."
+  ],
+  "tags": [
+    {
+      "name": "product-video"
+    },
+    {
+      "name": "phase-3"
+    },
+    {
+      "name": "error-handling"
+    }
+  ]
+}

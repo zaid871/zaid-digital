@@ -1,0 +1,233 @@
+{
+  "name": "affiliate-link-validation",
+  "description": "§18.4 Affiliate Link Validation: HTTP reachability check with timeout; broken → NEEDS_REVIEW. Terms/approval never assumed (§4).",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product:{affiliateUrl,...}} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/affiliate-check"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (§21).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "http-check-link",
+      "name": "http-check-link",
+      "notes": "Reachability check for the affiliate URL (§4: detect broken links). Validates reachability only — commission terms/eligibility must be confirmed on the network dashboard (never assumed, §4).",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($json.body ?? $json).product.affiliateUrl }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "classify-link",
+      "name": "classify-link",
+      "notes": "Classifies 2xx/3xx as reachable; timeouts/DNS/4xx/5xx as broken. NOTE: item shape differs on http error — handled defensively.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst code = Number(j.statusCode ?? 0);\nconst reachable = code >= 200 && code < 400;\n// product travels from the webhook item (http node replaced item data)\nconst wh = $('webhook-entry').first().json;\nconst product = (wh.body ?? wh).product ?? {};\nreturn [{ json: { product, reachable, statusCode: code,\n  error: j.error ?? null } }];"
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-reachable",
+      "name": "if-reachable",
+      "notes": "Reachable → valid. Otherwise broken → park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.reachable }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-valid",
+      "name": "mark-valid",
+      "notes": "Marks affiliate link valid (reachability only).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $json.product;\nreturn [{ json: { product: { ...p, affiliateValid: True,\n  affiliateCheckedAt: new Date().toISOString() } } }];"
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "mark-broken",
+      "name": "mark-broken",
+      "notes": "Broken links → NEEDS_REVIEW (§4). Never publishes with a dead link.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $json.product;\nconsole.log('[affiliate-check] broken link', $json.statusCode, $json.error);\nreturn [{ json: { product: { ...p, state: 'NEEDS_REVIEW', affiliateValid: False },\n  reason: 'broken_affiliate_link' } }];"
+      },
+      "position": [
+        1200,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-check",
+      "name": "log-check",
+      "notes": "Check log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[affiliate-check] done'); return [$input.first()];"
+      },
+      "position": [
+        1420,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "http-check-link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http-check-link": {
+      "main": [
+        [
+          {
+            "node": "classify-link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "classify-link": {
+      "main": [
+        [
+          {
+            "node": "if-reachable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-reachable": {
+      "main": [
+        [
+          {
+            "node": "mark-valid",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "mark-broken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-valid": {
+      "main": [
+        [
+          {
+            "node": "log-check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-broken": {
+      "main": [
+        [
+          {
+            "node": "log-check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

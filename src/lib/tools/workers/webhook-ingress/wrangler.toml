@@ -1,0 +1,15 @@
+# Cloudflare Worker: webhook ingress (see index.ts).
+# Deploy from this directory: `wrangler deploy`.
+# Secrets are set with `wrangler secret put`, never in this file:
+#   wrangler secret put META_APP_SECRET
+#   wrangler secret put META_VERIFY_TOKEN
+name = "toolbox-webhook-ingress"
+main = "index.ts"
+compatibility_date = "2026-11-22"
+
+[vars]
+# Public n8n webhook URL on the VM (via the Caddy /webhook/* route to the
+# standalone n8n; path = the auto-DM workflow's webhook path
+# affiliate/ig-comments). The Worker forwards only HMAC-verified
+# instagram/page events here.
+VM_WEBHOOK_URL = "http://158.180.19.153/webhook/affiliate/ig-comments"

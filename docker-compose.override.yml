@@ -1,0 +1,26 @@
+# Local test-only additions (auto-loaded by `docker compose` v2).
+#
+# The `floci` service below is profile-gated ("test"), so a production
+# `docker compose up -d` NEVER starts it. Start it only for S3-lane
+# testing on the Oracle VM's Docker — NEVER on the user's PC
+# (cloud-only rule):
+#   docker compose --profile test up -d floci
+#   npx tsx scripts/test-storage-s3-floci.ts
+#   docker compose --profile test down
+#
+# Floci (floci-io/floci, MIT) = local AWS emulator, the free replacement
+# for LocalStack Community (auth-token-only since March 2026). One
+# container speaks the AWS APIs on port 4566, no account, no token.
+# Image pinned to 2.4.0 (never `latest`); S3 only via FLOCI_SERVICES.
+# State is in-memory by default — a restart wipes test buckets, which
+# is fine for smoke tests. See docs/floci-s3-testing.md.
+
+services:
+  floci:
+    image: floci/floci:2.4.0
+    profiles: ["test"]
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      FLOCI_SERVICES: s3
+    restart: "no"

@@ -1,0 +1,252 @@
+{
+  "name": "digital: presell-gate",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Pre-sell hits from your landing page. {productType, productName|topic|niche, action: hit|status|reset}",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-presell"
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst productType = String(body.productType ?? '').trim();\nif (!['ebook', 'template_pack', 'pod'].includes(productType))\n  return [{ json: { valid: false, error: 'productType ebook|template_pack|pod me se ho' } }];\nconst name = String(body.productName ?? body.topic ?? body.niche ?? '').trim();\nif (name.length < 2) return [{ json: { valid: false, error: 'productName (ya topic/niche) zaroori hai' } }];\nconst action = ['hit', 'status', 'reset'].includes(body.action) ? body.action : 'hit';\nconst key = (productType + ':' + name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);\nconst topic = String(body.topic ?? body.niche ?? name);\nconst paths = { ebook: '/webhook/digital-ebook-generation',\n  template_pack: '/webhook/digital-template-generation', pod: '/webhook/digital-pod-generation' };\nreturn [{ json: { valid: true, key, productType, name, action, topic,\n  webhookPath: paths[productType],\n  triggerPayload: productType === 'ebook' ? { topic } : { niche: topic } } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        460
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "gate-counter",
+      "name": "gate-counter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "notes": "Counts hits; threshold hit -> auto-fires the generation webhook once.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pre-sell counter (lever 1). Hits persist in workflow static data (active\n// workflows only). Threshold reached once -> auto-fire generation webhook.\nconst store = $getWorkflowStaticData('global');\nstore.counters = store.counters || {};\nconst j = $input.first().json;\nconst threshold = parseInt(String($env.DIGITAL_PRESELL_THRESHOLD ?? '10'), 10) || 10;\nconst key = j.key;\nif (j.action === 'reset') {\n  delete store.counters[key];\n  return [{ json: { key, action: 'reset', hits: 0, threshold, validated: false, shouldTrigger: false } }];\n}\nconst c = store.counters[key] || { hits: 0, triggered: false };\nif (j.action === 'status') {\n  return [{ json: { key, action: 'status', hits: c.hits, threshold,\n    validated: c.hits >= threshold, triggered: !!c.triggered, shouldTrigger: false } }];\n}\nc.hits += 1;\nconst validated = c.hits >= threshold;\nconst shouldTrigger = validated && !c.triggered;\nif (shouldTrigger) c.triggered = true;\nstore.counters[key] = c;\nreturn [{ json: { key, action: 'hit', hits: c.hits, threshold, validated,\n  triggered: !!c.triggered, shouldTrigger,\n  webhookPath: j.webhookPath, triggerPayload: j.triggerPayload } }];\n"
+      }
+    },
+    {
+      "id": "if-trigger",
+      "name": "if-trigger",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldTrigger }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "trigger-generation",
+      "name": "trigger-generation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        240
+      ],
+      "notes": "Fires the generation webhook (fire-and-forget).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.N8N_PUBLIC_URL || 'http://localhost:5678') + $json.webhookPath }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.triggerPayload) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "respond-done",
+      "name": "respond-done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "gate-counter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gate-counter": {
+      "main": [
+        [
+          {
+            "node": "if-trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-trigger": {
+      "main": [
+        [
+          {
+            "node": "trigger-generation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-generation": {
+      "main": [
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Lever 1 (pre-sell validation): landing page se hits aate hain; DIGITAL_PRESELL_THRESHOLD (default 10) cross hote hi generation webhook auto-fire hota hai (ek baar). Pehle bikna, phir automation.",
+  "errorWorkflow": "digital-error-recovery"
+}

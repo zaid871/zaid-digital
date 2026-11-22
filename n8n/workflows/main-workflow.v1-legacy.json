@@ -1,0 +1,253 @@
+{
+  "connections": {
+    "compliance-gate-1": {
+      "main": [
+        [
+          {
+            "node": "creative-plan"
+          }
+        ]
+      ]
+    },
+    "creative-plan": {
+      "main": [
+        [
+          {
+            "node": "generate-assets"
+          }
+        ]
+      ]
+    },
+    "extract-product": {
+      "main": [
+        [
+          {
+            "node": "compliance-gate-1"
+          }
+        ]
+      ]
+    },
+    "generate-assets": {
+      "main": [
+        [
+          {
+            "node": "render"
+          }
+        ]
+      ]
+    },
+    "qa-gate": {
+      "main": [
+        [
+          {
+            "node": "deliver"
+          }
+        ]
+      ]
+    },
+    "render": {
+      "main": [
+        [
+          {
+            "node": "qa-gate"
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "extract-product"
+          }
+        ]
+      ]
+    },
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input"
+          }
+        ]
+      ]
+    }
+  },
+  "description": "Phase 3 — orchestration workflow. Each stage node reports progress to the backend via POST /api/v1/jobs/:id/stage-callback (header x-n8n-secret). Import into n8n; required env: BACKEND_URL, N8N_WEBHOOK_SECRET.",
+  "errorWorkflow": "product-video-errors",
+  "name": "product-video-main",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "notes": "Entry point. Backend POSTs { jobId, productUrl, options }. Validate the N8N_WEBHOOK_SECRET header before proceeding.",
+      "parameters": {
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "product-video/job"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook"
+    },
+    {
+      "id": "validate-input",
+      "notes": "STAGE 1 (url_validation): re-validate URL server-side (SSRF checks, redirect validation). Fail fast on blocked hosts.",
+      "parameters": {
+        "mode": "runOnceForAllItems"
+      },
+      "position": [
+        300,
+        300
+      ],
+      "type": "n8n-nodes-base.code"
+    },
+    {
+      "id": "extract-product",
+      "notes": "STAGES 2-5 (extraction → research → fact verification → media analysis). Backend returns ProductResearchObject + EvidenceObject[]. Bounded retries with exponential backoff + jitter; respect 429/Retry-After.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/extract"
+      },
+      "position": [
+        500,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "compliance-gate-1",
+      "notes": "STAGE 6 (compliance_review, pre-script). Verdict REJECTED stops the workflow; NEEDS_REVIEW pauses for human approval via the dashboard.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/compliance"
+      },
+      "position": [
+        700,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "creative-plan",
+      "notes": "STAGES 7-10 (creative planning → script → voiceover → storyboard). Produces CreativePlanObject, ScriptObject, audio asset, StoryboardObject.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/creative"
+      },
+      "position": [
+        900,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "generate-assets",
+      "notes": "STAGES 11-12 (AI visual + AI video generation). Capability-aware provider routing; image-to-video preferred when reference assets exist. Large media goes to object storage, never through workflow nodes.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/assets"
+      },
+      "position": [
+        1100,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "render",
+      "notes": "STAGE 13 (editing_rendering). Submits to the rendering queue worker (FFmpeg). Polls with timeout; stores MP4 + captions in object storage.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/render"
+      },
+      "position": [
+        1300,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "qa-gate",
+      "notes": "STAGE 14 (quality_assurance). Technical (ffprobe) + content checks. PASS → delivery; NEEDS_REVIEW → human; FAILED → error workflow with bounded stage-level retry.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/qa"
+      },
+      "position": [
+        1500,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "deliver",
+      "notes": "STAGE 15 (final_delivery). Marks job COMPLETED, records usage/cost, notifies frontend.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/internal/stages/deliver"
+      },
+      "position": [
+        1700,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    },
+    {
+      "id": "report-stage",
+      "notes": "REUSABLE PATTERN — after every stage node, POST to {{ $env.BACKEND_URL }}/api/v1/jobs/{jobId}/stage-callback with header x-n8n-secret={{ $env.N8N_WEBHOOK_SECRET }} and body { stageKey, status, progressPct?, message?, warnings? }. status ∈ pending|running|succeeded|failed|skipped|waiting_review. The backend derives job status, records JobEvents, flips FAILED on failed callbacks, and COMPLETED when all 15 stages succeed. Disabled (503) while N8N_WEBHOOK_SECRET is unset.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ $json.jobId }}/stage-callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "stageKey",
+              "value": "={{ $json.stageKey }}"
+            },
+            {
+              "name": "status",
+              "value": "={{ $json.stageStatus }}"
+            },
+            {
+              "name": "progressPct",
+              "value": "={{ $json.progressPct }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        300,
+        500
+      ],
+      "type": "n8n-nodes-base.httpRequest"
+    }
+  ],
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET"
+  ],
+  "tags": [
+    "product-video",
+    "phase-3"
+  ],
+  "version": "1.1.0"
+}

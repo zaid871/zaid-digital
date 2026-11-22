@@ -1,0 +1,54 @@
+# Background worker image: BullMQ consumers + FFmpeg rendering.
+# AI inference stays remote (cloud APIs); this worker only renders/assembles.
+FROM node:24-alpine AS base
+WORKDIR /app
+
+# FFmpeg + ffprobe for rendering and technical QA.
+# font-dejavu provides a caption font for burned-in subtitles; the path is
+# wired via CAPTION_FONT so render.ts never depends on distro font layouts.
+RUN apk add --no-cache ffmpeg font-dejavu
+ENV CAPTION_FONT=/usr/share/fonts/dejavu/DejaVuSans.ttf
+
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+COPY prisma ./prisma
+# Prisma 7 requires DATABASE_URL to load prisma.config.ts at generate time.
+# generate never connects to the DB, so a dummy URL is enough here; the
+# real URL comes from compose `environment:` at runtime.
+RUN DATABASE_URL=postgresql://pv:dummy@postgres:5432/product_video npx prisma generate
+COPY src ./src
+# tsx resolves the `@/` alias from tsconfig.json — without this file the
+# worker crashes on startup with "Cannot find module '@/lib/db'"
+# (first deploy 2026-11-13). It is build-context only, never executed.
+COPY tsconfig.json ./
+# Prisma 7's runtime client loads prisma.config.ts to resolve the
+# datasource URL (env DATABASE_URL). Without it the client fails with
+# "Invalid URL" and the DB stays unreachable (first deploy 2026-11-13).
+COPY prisma.config.ts ./
+# Tier A experimental video (HF Spaces) additionally needs:
+#   apk add python3 py3-pip && pip install gradio-client
+# It is intentionally NOT installed here — Tier A is opt-in via
+# HF_SPACES_VIDEO_ENABLED=true (see DEPLOY.md "Enabling Tier A").
+
+RUN addgroup -S app && adduser -S app -G app
+# Writable scratch + asset dirs for the app user.
+# Everything under /app must belong to `app`: the image runs as USER app,
+# and root-owned package.json caused EACCES crashes on first deploy
+# (2026-11-13) — tsx could not read package.json.
+RUN mkdir -p /app/storage/jobs /tmp/renders && chown -R app:app /app /tmp/renders
+USER app
+
+# Scratch space for temp render files (cleaned after each job).
+# Compose mounts the named `renders` volume here; the VOLUME instruction
+# is a fallback for `docker run` usage.
+VOLUME ["/tmp/renders"]
+
+# Liveness: the worker process must be running. (Deep queue-depth checks
+# belong in monitoring, not in a 60s healthcheck.)
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "process.exit(0)"
+
+# BullMQ worker: consumes `video-jobs`, drives the 15 stages, persists to Postgres.
+# Requires DATABASE_URL and REDIS_URL. tsx is a runtime dependency (not dev-only).
+CMD ["./node_modules/.bin/tsx", "src/worker.ts"]

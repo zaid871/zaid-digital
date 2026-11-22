@@ -1,0 +1,576 @@
+{
+  "name": "affiliate-video-rendering",
+  "description": "\u00a718.8 Video Rendering: gate \u2192 REAL backend POST /api/v1/jobs \u2192 poll \u2192 RENDERED | FAILED | NEEDS_REVIEW(timeout). 9:16 FFmpeg assembly by the content engine; no music/prices (\u00a710).",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product, script, visualBrief, voiceBrief} with x-n8n-secret.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/render"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "render-gate",
+      "name": "render-gate",
+      "notes": "Render gate: approved script + narration brief + productUrl required. Delegates the heavy render to the real content-engine backend.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst body = wh.body ?? wh;\nconst p = body.product ?? {};\nconst problems = [];\nif (!p.sourceUrl) problems.push('missing productUrl for render job');\nif ((body.script ?? null) === null) problems.push('missing approved script');\nif ((body.voiceBrief ?? null) === null) problems.push('missing narration brief');\nreturn [{ json: { product: p, script: body.script, visualBrief: body.visualBrief,\n  voiceBrief: body.voiceBrief, gateOk: problems.length === 0, problems } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-gate-ok",
+      "name": "if-gate-ok",
+      "notes": "Gate ok \u2192 create backend render job. Else park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.gateOk }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "create-render-job",
+      "name": "create-render-job",
+      "notes": "REAL backend endpoint: creates the video job (content engine runs script\u2192visuals\u2192voice\u2192FFmpeg render internally).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs",
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ productUrl: $json.product.sourceUrl, durationSeconds: 15, language: 'hinglish', voice: 'hi-IN-SwaraNeural', visualStyle: 'premium_dark', idempotencyKey: 'affiliate-' + Date.now() }) }}"
+      },
+      "position": [
+        980,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "check-created",
+      "name": "check-created",
+      "notes": "Job created \u2192 poll. Else fail.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ],
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.data.id }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "init-poll",
+      "name": "init-poll",
+      "notes": "Seeds poll loop (120 \u00d7 20s \u2248 40 min).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { jobId: $input.first().json.data.id, attempts: 0 } }];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "get-status",
+      "name": "get-status",
+      "notes": "REAL: poll job status.",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ $json.jobId }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "normalize-status",
+      "name": "normalize-status",
+      "notes": "Carries jobId, bumps attempts.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $input.first().json;\nconst prev = $('init-poll').first().json;\nconst job = res.data ?? {};\nreturn [{ json: { jobId: prev.jobId, attempts: prev.attempts + 1,\n  status: job.status ?? 'UNKNOWN', job } }];"
+      },
+      "position": [
+        1860,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "is-done",
+      "name": "is-done",
+      "notes": "Terminal \u2192 route. Else keep polling.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "regex",
+              "value1": "={{ $json.status }}",
+              "value2": "^(COMPLETED|FAILED|CANCELLED|WAITING_FOR_REVIEW)$"
+            }
+          ]
+        }
+      },
+      "position": [
+        2080,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "within-limit",
+      "name": "within-limit",
+      "notes": "Attempts \u2264 120 \u2192 wait & poll. Else timeout.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "number": [
+            {
+              "operation": "smallerEqual",
+              "value1": "={{ $json.attempts }}",
+              "value2": 120
+            }
+          ]
+        }
+      },
+      "position": [
+        2080,
+        360
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "wait-poll",
+      "name": "wait-poll",
+      "notes": "20s between polls.",
+      "parameters": {
+        "amount": 20,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "position": [
+        2300,
+        360
+      ],
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1
+    },
+    {
+      "id": "build-timeout",
+      "name": "build-timeout",
+      "notes": "Timeout \u2192 NEEDS_REVIEW (job may still run; manual check).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { state: 'NEEDS_REVIEW' }, jobId: j.jobId,\n  reason: 'render_timeout' } }];"
+      },
+      "position": [
+        2300,
+        540
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "is-completed",
+      "name": "is-completed",
+      "notes": "COMPLETED \u2192 RENDERED. Else FAILED.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "equals",
+              "value1": "={{ $json.status }}",
+              "value2": "COMPLETED"
+            }
+          ]
+        }
+      },
+      "position": [
+        2300,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "build-rendered",
+      "name": "build-rendered",
+      "notes": "Sets state RENDERED (\u00a719) with real download URL.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst base = String($env.BACKEND_URL ?? '').replace(/\\/$/, '');\nconst wh = $('webhook-entry').first().json;\nconst p = (wh.body ?? wh).product ?? {};\nreturn [{ json: { product: { ...p, state: 'RENDERED',\n  renderedAt: new Date().toISOString() },\n  jobId: j.jobId, downloadUrl: base + '/api/v1/jobs/' + j.jobId + '/download' } }];"
+      },
+      "position": [
+        2520,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-qc",
+      "name": "trigger-qc",
+      "notes": "Forwards to quality control (\u00a718.9).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/qc",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, jobId: $json.jobId, downloadUrl: $json.downloadUrl}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        2740,
+        40
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-rendered",
+      "name": "log-rendered",
+      "notes": "Render log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[render] RENDERED'); return [$input.first()];"
+      },
+      "position": [
+        2960,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "build-failed",
+      "name": "build-failed",
+      "notes": "Render job failed \u2192 FAILED.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'FAILED' },\n  reason: 'render_job_failed' } }];"
+      },
+      "position": [
+        2520,
+        280
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-render",
+      "name": "park-render",
+      "notes": "Gate failure \u2192 NEEDS_REVIEW.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { product: { state: 'NEEDS_REVIEW' },\n  problems: $json.problems } }];"
+      },
+      "position": [
+        980,
+        480
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "render-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "render-gate": {
+      "main": [
+        [
+          {
+            "node": "if-gate-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-gate-ok": {
+      "main": [
+        [
+          {
+            "node": "create-render-job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create-render-job": {
+      "main": [
+        [
+          {
+            "node": "check-created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-created": {
+      "main": [
+        [
+          {
+            "node": "init-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "init-poll": {
+      "main": [
+        [
+          {
+            "node": "get-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-status": {
+      "main": [
+        [
+          {
+            "node": "normalize-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-status": {
+      "main": [
+        [
+          {
+            "node": "is-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-done": {
+      "main": [
+        [
+          {
+            "node": "is-completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "within-limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "within-limit": {
+      "main": [
+        [
+          {
+            "node": "wait-poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-poll": {
+      "main": [
+        [
+          {
+            "node": "get-status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-completed": {
+      "main": [
+        [
+          {
+            "node": "build-rendered",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-rendered": {
+      "main": [
+        [
+          {
+            "node": "trigger-qc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-qc": {
+      "main": [
+        [
+          {
+            "node": "log-rendered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

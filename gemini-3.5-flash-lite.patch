@@ -1,0 +1,118 @@
+# Gemini model-ID patch — PENDING USER APPROVAL, do NOT apply until the user says yes.
+# Prepared 2026-11-08 from the weekly free-AI research finding (source: tracking goal_13bf0dda9286):
+#   gemini-2.0-flash was retired 2026-06-01; gemini-2.5-flash auto-routes to
+#   gemini-3.5-flash-lite from 2026-12-01. New default + fallback list:
+#   gemini-3.5-flash-lite -> gemini-2.5-flash-lite (dead IDs removed).
+# What it changes (6 files): default + fallback tail in src/lib/providers/gemini.ts,
+# LIVE_GEMINI_FLASH in src/lib/hub/types.ts, matching assertions in
+# scripts/test-gemini-fallback.ts, fixture ID in scripts/test-hub.ts,
+# comments in .env.example, fallback description in docs/ads-generator-additions.md.
+# NOTE: test 3 in test-gemini-fallback.ts keeps gemini-2.5-flash as an arbitrary
+# explicit-model fixture (stubbed fetch, never a configured default) — it must be a
+# model outside the new 2-model list, or there is nothing to fall back to.
+# Groq default swap (llama-3.3 -> gpt-oss-120b) is SEPARATE and NOT in this patch.
+# Apply from the repo root:  patch -p1 < gemini-3.5-flash-lite.patch
+# Verify:  npx tsx scripts/test-gemini-fallback.ts   (stubbed fetch, no key needed)
+#          npx tsx scripts/test-hub.ts
+# Live caveat (NOT verifiable here): the code sends temperature 0.7 — whether
+# AI Studio accepts that on gemini-3.5-flash-lite is checked on the first live
+# call at deploy, with the user's own key. Free tier, no cost.
+# After applying, delete this file.
+diff -ruN a/.env.example b/.env.example
+--- a/.env.example
++++ b/.env.example
+@@ -102,19 +102,19 @@
+ # keys are billing-tied and free-tier inputs may be used by Google for product
+ # improvement — ad scripts only, no sensitive data goes through this chain.
+ GEMINI_API_KEY=
+-# Optional model override (default: gemini-2.0-flash).
++# Optional model override (default: gemini-3.5-flash-lite).
+ #GEMINI_MODEL=
+ 
+ # Unified Hub — one gateway for Groq + Gemini + Pollinations (POST /api/v1/hub/run).
+ # Model IDs are env config: only IDs verified live on console.groq.com/docs/models.
+-# Defaults (all verified 2026-11-06): gpt-oss-120b / qwen3.8-27b (Preview) / gpt-oss-20b / gemini-2.0-flash.
++# Defaults (Groq IDs verified 2026-11-06; Gemini ID updated 2026-11-08): gpt-oss-120b / qwen3.8-27b (Preview) / gpt-oss-20b / gemini-3.5-flash-lite.
+ # Llama 3.1/3.3 are Enterprise-only and DeepSeek-R1-Distill-Llama-70B is retired — never set them here.
+ #HUB_PLAN_MODEL=openai/gpt-oss-120b
+ #HUB_BUILD_MODEL=qwen/qwen3.8-27b
+ #HUB_CRITIC_MODEL=openai/gpt-oss-120b
+ #HUB_SYNTH_MODEL=openai/gpt-oss-120b
+ #HUB_FAST_MODEL=openai/gpt-oss-20b
+-#HUB_GEMINI_MODEL=gemini-2.0-flash
++#HUB_GEMINI_MODEL=gemini-3.5-flash-lite
+ # Parallel text legs per ensemble run (budget cap, not preference; max live legs = 4).
+ HUB_ENSEMBLE_MAX=4
+ # Text-lane timeout per leg in ms: a slow leg pauses, the run does not wait.
+diff -ruN a/docs/ads-generator-additions.md b/docs/ads-generator-additions.md
+--- a/docs/ads-generator-additions.md
++++ b/docs/ads-generator-additions.md
+@@ -29,8 +29,7 @@
+ ## 2. Gemini model fallback — `src/lib/providers/gemini.ts`
+ 
+ `modelFallbackList()`: requested model (or env/default
+-`gemini-2.0-flash`) first, then `gemini-2.5-flash-lite`,
+-`gemini-2.5-flash`, `gemini-2.0-flash`. On a 429 the adapter moves to
++`gemini-3.5-flash-lite`) first, then `gemini-2.5-flash-lite`. On a 429 the adapter moves to
+ the next model immediately instead of burning retries on an
+ exhausted one; other errors get one retry per model. Override the
+ tail with `GEMINI_MODELS="a,b"`. 2.5-pro deliberately left out —
+diff -ruN a/scripts/test-gemini-fallback.ts b/scripts/test-gemini-fallback.ts
+--- a/scripts/test-gemini-fallback.ts
++++ b/scripts/test-gemini-fallback.ts
+@@ -43,8 +43,8 @@
+ 
+   // 1. Default list keeps the current default first, then flash fallbacks.
+   const list = modelFallbackList();
+-  check("default model first", list[0] === "gemini-2.0-flash", list.join(","));
+-  check("flash-lite + flash in list", list.includes("gemini-2.5-flash-lite") && list.includes("gemini-2.5-flash"));
++  check("default model first", list[0] === "gemini-3.5-flash-lite", list.join(","));
++  check("both flash-lite models in list", list.includes("gemini-3.5-flash-lite") && list.includes("gemini-2.5-flash-lite"));
+   check("no duplicates", new Set(list).size === list.length);
+ 
+   // 2. 429 on first model -> second model succeeds, no wasted retries.
+diff -ruN a/scripts/test-hub.ts b/scripts/test-hub.ts
+--- a/scripts/test-hub.ts
++++ b/scripts/test-hub.ts
+@@ -72,7 +72,7 @@
+   const legs = [
+     { id: "ok", provider: "groq" as const, model: "openai/gpt-oss-120b" },
+     { id: "slow", provider: "groq" as const, model: "openai/gpt-oss-20b" },
+-    { id: "err", provider: "gemini" as const, model: "gemini-2.0-flash" },
++    { id: "err", provider: "gemini" as const, model: "gemini-3.5-flash-lite" },
+     { id: "dup", provider: "groq" as const, model: "qwen/qwen3.8-27b" },
+   ];
+   const fan = await fanOut(legs, "test prompt", { timeoutMs: 60, caller: fakeCaller });
+diff -ruN a/src/lib/hub/types.ts b/src/lib/hub/types.ts
+--- a/src/lib/hub/types.ts
++++ b/src/lib/hub/types.ts
+@@ -20,7 +20,7 @@
+ export const LIVE_GROQ_120B = "openai/gpt-oss-120b";
+ export const LIVE_GROQ_20B = "openai/gpt-oss-20b";
+ export const LIVE_GROQ_QWEN = "qwen/qwen3.8-27b";
+-export const LIVE_GEMINI_FLASH = "gemini-2.0-flash";
++export const LIVE_GEMINI_FLASH = "gemini-3.5-flash-lite";
+ 
+ /** Fallback when the Qwen Preview model 404s (spec §10). */
+ export const QWEN_FALLBACK_MODEL = LIVE_GROQ_120B;
+diff -ruN a/src/lib/providers/gemini.ts b/src/lib/providers/gemini.ts
+--- a/src/lib/providers/gemini.ts
++++ b/src/lib/providers/gemini.ts
+@@ -45,7 +45,7 @@
+     .split(",")
+     .map((s) => s.trim())
+     .filter(Boolean);
+-  const tail = envList.length > 0 ? envList : ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"];
++  const tail = envList.length > 0 ? envList : ["gemini-2.5-flash-lite"];
+   return [...new Set([first, ...tail])];
+ }
+ 
+@@ -54,7 +54,7 @@
+ }
+ 
+ export function defaultModel(): string {
+-  return process.env.GEMINI_MODEL || "gemini-2.0-flash";
++  return process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+ }
+ 
+ export async function generateText(

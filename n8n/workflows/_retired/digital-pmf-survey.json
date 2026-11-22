@@ -1,0 +1,171 @@
+{
+  "name": "digital: pmf-survey",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Sean Ellis survey: {product, action, answer}. Email layer judne par survey link yahi aayega.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-pmf"
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst product = String(body.product ?? '').trim();\nif (product.length < 2) return [{ json: { valid: false, error: 'product zaroori hai' } }];\nconst action = ['answer', 'status', 'reset'].includes(body.action) ? body.action : 'answer';\nconst answers = ['very_disappointed', 'somewhat_disappointed', 'not_disappointed'];\nconst answer = answers.includes(body.answer) ? body.answer : null;\nif (action === 'answer' && !answer)\n  return [{ json: { valid: false, error: 'answer very_disappointed|somewhat_disappointed|not_disappointed me se ho' } }];\nconst key = product.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);\nreturn [{ json: { valid: true, key, product, action, answer } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        460
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "tally",
+      "name": "tally",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "notes": "Static-data tally. 10+ responses par verdict: >=40% very_disappointed = pmf_ok.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Sean Ellis PMF tally. Static data persists in ACTIVE workflows only;\n// n8n restart resets counters (documented limitation).\nconst store = $getWorkflowStaticData('global');\nstore.pmf = store.pmf || {};\nconst j = $input.first().json;\nconst key = j.key;\nif (j.action === 'reset') {\n  delete store.pmf[key];\n  return [{ json: { product: j.product, action: 'reset', responses: 0, verdict: 'need_more_data' } }];\n}\nconst t = store.pmf[key] || { very: 0, somewhat: 0, not: 0 };\nif (j.action === 'answer' && j.answer) {\n  if (j.answer === 'very_disappointed') t.very += 1;\n  else if (j.answer === 'somewhat_disappointed') t.somewhat += 1;\n  else t.not += 1;\n}\nstore.pmf[key] = t;\nconst responses = t.very + t.somewhat + t.not;\nconst pct = responses ? Math.round((t.very / responses) * 100) : 0;\nlet verdict = 'need_more_data';\nif (responses >= 10) verdict = pct >= 40 ? 'pmf_ok' : 'pmf_risk';\nreturn [{ json: { product: j.product, action: j.action, responses,\n  veryDisappointed: t.very, veryDisappointedPct: pct, verdict } }];\n"
+      }
+    },
+    {
+      "id": "respond-done",
+      "name": "respond-done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "tally",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tally": {
+      "main": [
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Sean Ellis PMF survey tally (failure-articles add #2).",
+  "errorWorkflow": "digital-error-recovery"
+}

@@ -1,0 +1,129 @@
+{
+  "name": "digital: problem-miner",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Weekly Mondays 07:00 IST (01:30 UTC).",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 1 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "build-body",
+      "name": "build-body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "notes": "Niches from DIGITAL_MINER_NICHES env.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Niches: DIGITAL_MINER_NICHES env (comma-separated) or defaults.\nconst raw = String($env.DIGITAL_MINER_NICHES ?? 'meal prep,budgeting,freelancing');\nconst niches = raw.split(',').map(s => s.trim()).filter(s => s.length >= 2).slice(0, 5);\nreturn [{ json: { niches, maxPerNiche: 10 } }];\n"
+      }
+    },
+    {
+      "id": "mine",
+      "name": "mine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "notes": "5 min timeout (Reddit+suggest+trends).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/discovery/problem-miner",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "report",
+      "name": "report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "notes": "Top-10 problems into the execution log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nconst lines = [`Problem miner ${d.scannedAt ?? ''} — niches: ${(d.niches ?? []).join(', ')}`];\nfor (const p of (d.problems ?? [])) {\n  lines.push(`[${p.score}] (${p.source}/${p.trend}) ${p.problem}`);\n  lines.push(`    signals: ${(p.signals ?? []).join(', ')} | ${p.evidence?.[0] ?? ''}`);\n}\nlines.push('Review karo, winners ko digital-presell-gate par bhejo.');\nconsole.log(lines.join('\\n'));\nreturn [{ json: { ok: true, count: (d.problems ?? []).length } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "build-body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-body": {
+      "main": [
+        [
+          {
+            "node": "mine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mine": {
+      "main": [
+        [
+          {
+            "node": "report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "notes": "Weekly Problem Miner v1: Reddit+suggest+trends → top-10 problems.",
+  "errorWorkflow": "digital-error-recovery"
+}

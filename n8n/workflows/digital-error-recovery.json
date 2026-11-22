@@ -1,0 +1,506 @@
+{
+  "name": "digital-error-recovery",
+  "description": "Error Recovery for digital workflows: detects failures (errorTrigger + daily sweep), classifies retryable vs permanent, SPEND GUARD (never auto-spends), bounded retries (3x, 5-min) via REAL POST /api/v1/jobs/:id/retry, manual resume path. Also serves as errorWorkflow for the other digital workflows. Clone of affiliate-error-recovery (2026-11-13 cross-transfer).",
+  "nodes": [
+    {
+      "id": "error-trigger",
+      "name": "error-trigger",
+      "notes": "Receives failed executions from workflows linked via errorWorkflow. Internal \u2014 no auth needed.",
+      "parameters": {},
+      "position": [
+        100,
+        140
+      ],
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1
+    },
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {failures?} with x-n8n-secret \u2014 the daily sweep trigger.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "digital/error-sweep"
+      },
+      "position": [
+        100,
+        460
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-sweep",
+      "name": "auth-sweep",
+      "notes": "Secret check for the sweep webhook (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "normalize-input",
+      "name": "normalize-input",
+      "notes": "Normalizes both entry shapes into failure items.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\n// Two entry shapes: errorTrigger execution vs sweep webhook payload.\nconst isErrTrigger = Boolean(item.execution ?? item.workflow);\nlet failures = [];\nif (isErrTrigger) {\n  failures = [{ kind: 'execution_error',\n    workflow: (item.workflow ?? {}).name ?? 'unknown',\n    node: (item.execution ?? {}).lastNodeExecuted ?? 'unknown',\n    message: String(item.message ?? item.error ?? ''), retryCount: 0 }];\n} else {\n  const b = item.body ?? item;\n  failures = (b.failures ?? []).map(f => ({ kind: 'sweep', ...f, retryCount: f.retryCount ?? 0 }));\n}\nreturn failures.map(f => ({ json: f }));"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "classify",
+      "name": "classify",
+      "notes": "Classifies failures (\u00a720). SPEND GUARD: anything payment/billing-related is NEVER auto-retried \u2014 no automatic spending, ever.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const f = $input.first().json;\nconst msg = String(f.message ?? '');\nconst spendBlocked = /payment|billing|402|insufficient\\s*funds|quota_exceeded.*paid|card\\s*declined/i.test(msg);\nconst retryable = !spendBlocked && /timeout|timed out|429|rate\\s*limit|5\\d\\d|ECONN|ENOTFOUND|socket|overload|temporarily/i.test(msg);\nconst permanent = /unauthor|forbidden|validation|invalid|not\\s*allowed|ig_eligibility_failed|fb_page_verification_failed/i.test(msg);\nreturn [{ json: { ...f, spendBlocked, retryable, permanent,\n  strategy: spendBlocked ? 'park_spend_guard' : retryable ? 'bounded_retry' : 'park_manual' } }];"
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-spend-blocked",
+      "name": "if-spend-blocked",
+      "notes": "Spend-blocked \u2192 park immediately. Else continue.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.spendBlocked }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "park-spend",
+      "name": "park-spend",
+      "notes": "\u00a720/\u00a722: payment-related failures are never retried automatically.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[error-recovery] SPEND GUARD \u2014 no auto-spend');\nreturn [{ json: { ...$input.first().json, state: 'NEEDS_REVIEW',\n  reason: 'spend_guard_blocked' } }];"
+      },
+      "position": [
+        1200,
+        480
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-retryable",
+      "name": "if-retryable",
+      "notes": "Retryable \u2192 bounded retry. Permanent \u2192 manual path.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.retryable }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "check-budget",
+      "name": "check-budget",
+      "notes": "Bounded retries (\u00a720): max 3 attempts, 5-min intervals.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const f = $input.first().json;\nconst n = Number(f.retryCount ?? 0);\nconst budgetLeft = n < 3;\nreturn [{ json: { ...f, retryCount: n + 1, budgetLeft,\n  backoffNote: 'attempt ' + (n + 1) + ' of 3, 5-min interval' } }];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-budget-left",
+      "name": "if-budget-left",
+      "notes": "Budget left \u2192 wait & retry. Else park for manual resume.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.budgetLeft }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "wait-backoff",
+      "name": "wait-backoff",
+      "notes": "Backoff interval before retry.",
+      "parameters": {
+        "amount": 5,
+        "resume": "afterTimeInterval",
+        "unit": "minutes"
+      },
+      "position": [
+        1860,
+        140
+      ],
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1
+    },
+    {
+      "id": "has-job-id",
+      "name": "has-job-id",
+      "notes": "Backend jobId present \u2192 use REAL retry endpoint. Else manual resume.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $json.jobId }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        2080,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "retry-job",
+      "name": "retry-job",
+      "notes": "REAL backend endpoint: retries the failed job.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/jobs/{{ $json.jobId }}/retry",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "position": [
+        2300,
+        40
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-retried",
+      "name": "log-retried",
+      "notes": "Retry log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[error-recovery] retried'); return [$input.first()];"
+      },
+      "position": [
+        2520,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "manual-resume",
+      "name": "manual-resume",
+      "notes": "Manual resume path (\u00a720): clear instructions, no data loss.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const f = $input.first().json;\nreturn [{ json: { ...f, state: 'NEEDS_REVIEW', manualResume: {\n  how: 'Re-trigger the failed workflow webhook with the same idempotencyKey, '\n    + 'or fix the input and re-run from the n8n executions panel.',\n  context: { workflow: f.workflow, node: f.node, message: f.message } } } }];"
+      },
+      "position": [
+        2300,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-permanent",
+      "name": "park-permanent",
+      "notes": "Permanent failures \u2192 NEEDS_REVIEW for human decision.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { ...$input.first().json, state: 'NEEDS_REVIEW',\n  reason: 'permanent_failure' } }];"
+      },
+      "position": [
+        1420,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-outcome",
+      "name": "log-outcome",
+      "notes": "Outcome log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[error-recovery] outcome'); return [$input.first()];"
+      },
+      "position": [
+        2740,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "error-trigger": {
+      "main": [
+        [
+          {
+            "node": "normalize-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-sweep": {
+      "main": [
+        [
+          {
+            "node": "normalize-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-input": {
+      "main": [
+        [
+          {
+            "node": "classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "classify": {
+      "main": [
+        [
+          {
+            "node": "if-spend-blocked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-spend-blocked": {
+      "main": [
+        [
+          {
+            "node": "park-spend",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "if-retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-spend": {
+      "main": [
+        [
+          {
+            "node": "log-outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-retryable": {
+      "main": [
+        [
+          {
+            "node": "check-budget",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-permanent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "park-permanent": {
+      "main": [
+        [
+          {
+            "node": "log-outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-budget": {
+      "main": [
+        [
+          {
+            "node": "if-budget-left",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-budget-left": {
+      "main": [
+        [
+          {
+            "node": "wait-backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "manual-resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "manual-resume": {
+      "main": [
+        [
+          {
+            "node": "log-outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-backoff": {
+      "main": [
+        [
+          {
+            "node": "has-job-id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "has-job-id": {
+      "main": [
+        [
+          {
+            "node": "retry-job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "manual-resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "retry-job": {
+      "main": [
+        [
+          {
+            "node": "log-retried",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log-retried": {
+      "main": [
+        [
+          {
+            "node": "log-outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [],
+  "active": false
+}

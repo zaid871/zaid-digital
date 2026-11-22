@@ -1,0 +1,304 @@
+{
+  "name": "affiliate-product-discovery",
+  "description": "\u00a718.2 Product Discovery: source stubs \u2192 dedup \u2192 \u00a75 compliance pre-filter \u2192 DISCOVERED \u2192 forwards to verification.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {triggeredBy?, date?} with x-n8n-secret header.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/discovery"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "fetch-sources",
+      "name": "fetch-sources",
+      "notes": "Source stubs (\u00a73). STUB candidates are intentionally empty \u2014 the system never invents products. Plug real permitted feeds/APIs here.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pluggable product sources (\u00a73). Each source is a stub returning\n// candidate products. Replace stubs with real permitted feeds/APIs\n// (affiliate network APIs, public product feeds). Respect robots/ToS.\nconst SOURCES = [\n  { name: 'stub-source', note: 'STUB \u2014 plug a real permitted product feed/API here' },\n];\nconst STUB_CANDIDATES = []; // intentionally empty: no fake products invented\nconst body = ($input.first().json.body ?? $input.first().json);\nreturn [{ json: { date: body.date ?? null, sources: SOURCES.map(s => s.name),\n  candidates: STUB_CANDIDATES } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "dedup-filter",
+      "name": "dedup-filter",
+      "notes": "Dedup + \u00a75 compliance pre-filter. Business states (\u00a719): DISCOVERED \u2192 VERIFIED \u2192 SCRIPTED \u2192 ASSETS_READY \u2192 RENDERED \u2192 QC_APPROVED \u2192 LISTED \u2192 PUBLISHED \u2192 ANALYZED, plus FAILED | REJECTED | NEEDS_REVIEW. Persistence TODO (no /api/v1/products endpoint).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\n// Compliance pre-filter (\u00a75, Deobandi fiqh): never promote disallowed products.\nconst DENY = [/alcohol/i, /pork/i, /gambling|betting|casino|lottery/i,\n  /tobacco|cigarette|vape/i, /weapon|firearm/i, /adult|porn/i,\n  /interest\\s*free\\s*loan|riba/i];\nconst seen = new Set();\nconst products = [], rejected = [];\nfor (const c of (j.candidates ?? [])) {\n  const key = String(c.url ?? c.title ?? '').toLowerCase().trim();\n  if (!key || seen.has(key)) { rejected.push({ c, reason: 'duplicate' }); continue; }\n  seen.add(key);\n  const hay = (c.title ?? '') + ' ' + (c.category ?? '') + ' ' + (c.description ?? '');\n  if (DENY.some(rx => rx.test(hay))) { rejected.push({ c, reason: 'compliance_prefilter' }); continue; }\n  products.push({ ...c, state: 'DISCOVERED', discoveredAt: new Date().toISOString() });\n}\n// NOTE: persistence to a products table is TODO \u2014 no /api/v1/products\n// endpoint exists yet. State travels in the payload for now.\nreturn [{ json: { products, rejected,\n  note: 'persistence TODO (no products endpoint yet)' } }];"
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "has-products",
+      "name": "has-products",
+      "notes": "True: forward new products to verification. False: log and stop.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.products.length > 0 }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1420,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "trigger-verification",
+      "name": "trigger-verification",
+      "notes": "Forwards DISCOVERED products to verification (\u00a718.3).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/verification",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({products: $json.products}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        1640,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-done",
+      "name": "log-done",
+      "notes": "Discovery run log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.log('[discovery] done', JSON.stringify({ found: (j.products ?? []).length, rejected: (j.rejected ?? []).length }));\nreturn [{ json: { ok: True, found: (j.products ?? []).length } }];"
+      },
+      "position": [
+        1860,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-empty",
+      "name": "log-empty",
+      "notes": "Logs empty runs \u2014 never silently dropped.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[discovery] no new products'); return [{ json: { ok: True, found: 0 } }];"
+      },
+      "position": [
+        1200,
+        480
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "season-rank",
+      "name": "season-rank",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        300
+      ],
+      "notes": "Season-aware ranking (digital technique): seasonal products +25, never a veto.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/discovery/season-rank",
+        "options": {
+          "timeout": 30000
+        },
+        "onError": "continueRegularOutput",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ products: $json.products }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "apply-ranking",
+      "name": "apply-ranking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        300
+      ],
+      "notes": "Applies the ranked order, or keeps the dedup order when ranking failed.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Unwrap the season-rank response; fall back to the dedup order when the\n// ranking call failed (ranking is a nudge, never a gate).\nconst r = $input.first().json;\nconst ranked = (r.data ?? r).products;\nconst prev = $('dedup-filter').first().json;\nconst products = Array.isArray(ranked) && ranked.length ? ranked : (prev.products ?? []);\nreturn [{ json: { ...prev, products } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "fetch-sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch-sources": {
+      "main": [
+        [
+          {
+            "node": "dedup-filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dedup-filter": {
+      "main": [
+        [
+          {
+            "node": "season-rank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "has-products": {
+      "main": [
+        [
+          {
+            "node": "trigger-verification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-verification": {
+      "main": [
+        [
+          {
+            "node": "log-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "season-rank": {
+      "main": [
+        [
+          {
+            "node": "apply-ranking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "apply-ranking": {
+      "main": [
+        [
+          {
+            "node": "has-products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

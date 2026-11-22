@@ -1,0 +1,116 @@
+{
+ "name": "digital-idea-briefs",
+ "pinData": {},
+ "active": false,
+ "nodes": [
+  {
+   "parameters": {
+    "rule": {
+     "interval": [
+      {
+       "field": "cronExpression",
+       "expression": "0 2 * * 1"
+      }
+     ]
+    }
+   },
+   "name": "schedule-trigger",
+   "type": "n8n-nodes-base.scheduleTrigger",
+   "typeVersion": 1.2,
+   "position": [
+    0,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "mode": "runOnceForAllItems",
+    "jsCode": "// Product types: DIGITAL_BRIEF_TYPES env (comma-separated) or defaults.\nconst raw = String($env.DIGITAL_BRIEF_TYPES ?? 'template,ebook');\nconst productTypes = raw.split(',').map(s => s.trim()).filter(s => ['template','ebook','planner','spreadsheet'].includes(s));\nreturn [{ json: { productTypes: productTypes.length ? productTypes : ['template','ebook'], maxBriefs: 6, includeYouTube: true, includeEtsy: true } }];"
+   },
+   "name": "build-body",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    240,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $env.BACKEND_URL }}/api/v1/digital/briefs",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ $json }}",
+    "options": {
+     "timeout": 300000
+    },
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "x-n8n-secret",
+       "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+      }
+     ]
+    },
+    "onError": "continueRegularOutput"
+   },
+   "name": "briefs",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    480,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "mode": "runOnceForAllItems",
+    "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nconst lines = [`Idea briefs ${d.minedAt ?? ''} — ${ (d.briefs ?? []).length } briefs`];\nfor (const b of (d.briefs ?? [])) {\n  lines.push(`[${b.demandScore}] (${b.trend}) ${b.productType}: ${b.title}`);\n  if (b.kinds) lines.push(`    kinds: ${b.kinds.join('/')} | theme: ${b.theme}`);\n  if (b.ebookOutline) lines.push(`    outline: ${b.ebookOutline.join(' | ')}`);\n  lines.push(`    gap: ${b.gap}`);\n  lines.push(`    uniqueness: ${(b.uniqueness ?? []).join(' | ')}`);\n  lines.push(`    evidence: ${(b.demandEvidence ?? []).slice(0, 2).join(' | ')}`);\n}\nconst a = d.analysis ?? {};\nlines.push(`Top kinds: ${(a.topKinds ?? []).map(k => `${k.kind} (${k.demand}, ${k.trend})`).join(', ')}`);\nlines.push(`Top niches: ${(a.topNiches ?? []).map(n => `${n.niche} (${n.demand}, ${n.trend})`).join(', ')}`);\nlines.push(`Rising queries: ${(a.risingQueries ?? []).join(', ')}`);\nlines.push(`Warnings: ${(d.warnings ?? []).join('; ')}`);\nreturn [{ json: { report: lines.join('\\n') } }];"
+   },
+   "name": "report",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    720,
+    300
+   ]
+  }
+ ],
+ "connections": {
+  "schedule-trigger": {
+   "main": [
+    [
+     {
+      "node": "build-body",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "build-body": {
+   "main": [
+    [
+     {
+      "node": "briefs",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "briefs": {
+   "main": [
+    [
+     {
+      "node": "report",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

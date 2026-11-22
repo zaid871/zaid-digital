@@ -1,0 +1,93 @@
+{
+  "name": "digital-marketing-brain",
+  "pinData": {},
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 1 * * *"
+            }
+          ]
+        }
+      },
+      "id": "fadb01ea-d7c1-4a3e-85f5-8fe8743a6f75",
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/brain/daily",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "4ab0699c-6d01-49d7-aef0-122f3830d533",
+      "name": "daily",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nconst p = d.plan ?? {};\nconst lines = [`Brain ${p.date ?? ''} — affiliate: ${p.affiliate ? p.affiliate.title + ' (score ' + p.affiliate.score + ')' : p.affiliateReason ?? 'none'}, fired: ${d.affiliateFired ?? false}, fb: ${d.fbFired ?? false}`];\nfor (const s of (p.slots ?? [])) { lines.push(`  [${s.slot}] ${s.format} ${s.title} (score ${s.score}) — ${s.reasons.join(' | ')}`); }\nif ((p.coverage?.unpromoted7d ?? []).length) lines.push(`  coverage: 7 din se promote nahi hue: ${p.coverage.unpromoted7d.join(', ')}`);\nreturn [{ json: { report: lines.join('\\n') } }];"
+      },
+      "id": "eb3b7859-e18a-49f1-a3b3-77a3ebd8c6c8",
+      "name": "report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "daily",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "daily": {
+      "main": [
+        [
+          {
+            "node": "report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "errorWorkflow": "digital-error-recovery"
+}

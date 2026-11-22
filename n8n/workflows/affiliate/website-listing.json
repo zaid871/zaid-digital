@@ -1,0 +1,419 @@
+{
+  "name": "affiliate-website-listing",
+  "description": "\u00a718.10 Website Listing: only QC_APPROVED; disclosure + neutral CTA; no prices displayed (\u00a712). Publish fail-safe \u2192 NEEDS_REVIEW. Then triggers IG + FB publishing independently.",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "notes": "Entry: POST {product (QC_APPROVED), downloadUrl} with x-n8n-secret.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/website"
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "auth-gate",
+      "name": "auth-gate",
+      "notes": "Secret check (\u00a721).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nreturn [$input.first()];"
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "listing-gate",
+      "name": "listing-gate",
+      "notes": "\u00a712 gate: only QC_APPROVED products; listing has disclosure + neutral CTA; asserts no price is displayed.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wh = $('webhook-entry').first().json;\nconst body = wh.body ?? wh;\nconst p = body.product ?? {};\nconst ok = p.state === 'QC_APPROVED';\n// \u00a712 listing object: facts only, disclosure, neutral CTA, NO prices displayed.\nconst listing = {\n  title: p.name ?? 'Product', category: p.category ?? 'general',\n  description: (p.facts ?? []).map(f => f.claim).join('. '),\n  affiliateUrl: p.affiliateUrl ?? null,\n  affiliateDisclosure: 'Affiliate disclosure: this page contains affiliate links. '\n    + 'We may earn a commission at no extra cost to you.',\n  cta: 'View Product', price: null, // prices never displayed (\u00a712)\n};\nconst priceLeak = /\u20b9|Rs\\.?\\s*\\d|\\$\\s*\\d/.test(JSON.stringify(listing));\nreturn [{ json: { product: p, downloadUrl: body.downloadUrl, listing,\n  gateOk: ok && !priceLeak, reason: !ok ? 'not QC_APPROVED' : (priceLeak ? 'price_leak' : '') } }];"
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-gate-ok",
+      "name": "if-gate-ok",
+      "notes": "Gate ok \u2192 publish. Else park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.gateOk }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "publish-configured",
+      "name": "publish-configured",
+      "notes": "WEBSITE_PUBLISH_URL set \u2192 POST listing. Else NEEDS_REVIEW (fail-safe).",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "string": [
+            {
+              "operation": "notEmpty",
+              "value1": "={{ $env.WEBSITE_PUBLISH_URL }}",
+              "value2": ""
+            }
+          ]
+        }
+      },
+      "position": [
+        980,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "http-post-listing",
+      "name": "http-post-listing",
+      "notes": "Publishes the listing draft to the static site endpoint (\u00a712). TODO: replace with the real static-catalogue publish step when the site generator exists.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WEBSITE_PUBLISH_URL }}",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.listing) }}"
+      },
+      "position": [
+        1200,
+        140
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "classify-publish",
+      "name": "classify-publish",
+      "notes": "Publish result classifier.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst code = Number(j.statusCode ?? 0);\nconst ok = code >= 200 && code < 300;\nreturn [{ json: { product: j.product, listing: j.listing, published: ok,\n  statusCode: code, error: j.error ?? null } }];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-published",
+      "name": "if-published",
+      "notes": "Published \u2192 LISTED. Else park.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.published }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1640,
+        140
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "mark-listed",
+      "name": "mark-listed",
+      "notes": "Sets state LISTED (\u00a719).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { ...j.product, state: 'LISTED',\n  listedAt: new Date().toISOString() }, downloadUrl: $json.downloadUrl, jobId: j.jobId } }];"
+      },
+      "position": [
+        1860,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "trigger-ig",
+      "name": "trigger-ig",
+      "notes": "Forwards to Instagram publishing (\u00a718.11). onError continue \u2014 FB publishing still runs if IG fails (independence).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/instagram",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, downloadUrl: $json.downloadUrl, jobId: $json.jobId}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        2080,
+        40
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "trigger-fb",
+      "name": "trigger-fb",
+      "notes": "Forwards to Facebook publishing (\u00a718.12).",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_BASE_URL }}/webhook/affiliate/facebook",
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({product: $json.product, downloadUrl: $json.downloadUrl, jobId: $json.jobId}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "position": [
+        2300,
+        40
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "log-listed",
+      "name": "log-listed",
+      "notes": "Listing log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[website] LISTED'); return [$input.first()];"
+      },
+      "position": [
+        2520,
+        40
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "park-listing",
+      "name": "park-listing",
+      "notes": "Park: gate failed, publish unconfigured, or publish failed.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { product: { ...j.product, state: 'NEEDS_REVIEW' },\n  reason: j.reason || 'website_publish_failed' } }];"
+      },
+      "position": [
+        1860,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "auth-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth-gate": {
+      "main": [
+        [
+          {
+            "node": "listing-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "listing-gate": {
+      "main": [
+        [
+          {
+            "node": "if-gate-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-gate-ok": {
+      "main": [
+        [
+          {
+            "node": "publish-configured",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "publish-configured": {
+      "main": [
+        [
+          {
+            "node": "http-post-listing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http-post-listing": {
+      "main": [
+        [
+          {
+            "node": "classify-publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "classify-publish": {
+      "main": [
+        [
+          {
+            "node": "if-published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-published": {
+      "main": [
+        [
+          {
+            "node": "mark-listed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "park-listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-listed": {
+      "main": [
+        [
+          {
+            "node": "trigger-ig",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-ig": {
+      "main": [
+        [
+          {
+            "node": "trigger-fb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger-fb": {
+      "main": [
+        [
+          {
+            "node": "log-listed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_BASE_URL",
+    "WEBSITE_PUBLISH_URL"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

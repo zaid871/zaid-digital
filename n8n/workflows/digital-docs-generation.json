@@ -1,0 +1,576 @@
+{
+  "name": "digital-docs-generation",
+  "pinData": {},
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-docs-generation"
+      },
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\n\nconst format = String(body.format ?? 'docx').trim().toLowerCase();\nif (!['docx','pptx','epub'].includes(format)) return [{ json: { valid: false, error: 'format docx, pptx ya epub hona chahiye' } }];\nconst title = String(body.title ?? body.topic ?? '').trim();\nif (title.length < 3) return [{ json: { valid: false, error: 'title (min 3 chars) zaroori hai' } }];\nconst payload = { format, title };\nfor (const k of ['subtitle','author','language']) if (body[k] !== undefined) payload[k] = body[k];\nconst contentKey = format === 'docx' ? 'sections' : format === 'pptx' ? 'slides' : 'chapters';\nconst hasContent = Array.isArray(body[contentKey]) && body[contentKey].length > 0;\nif (hasContent) payload[contentKey] = body[contentKey];\nconst topic = String(body.topic ?? title).trim();\nconst draftPrompt = format === 'pptx'\n  ? `Write a presentation titled \"${title}\" about the topic \"${topic}\". Reply with ONLY a JSON array of 6-8 slides, no other text. Each slide: {\"title\": \"short slide title\", \"bullets\": [\"3-5 short bullets, max 12 words each\"], \"notes\": \"one speaker-note sentence\"}. Write in Roman-script Hinglish. Practical, specific content \u2014 no prices, no discounts, no income or result promises, no fake claims.`\n  : format === 'epub'\n  ? `Write an ebook titled \"${title}\" about the topic \"${topic}\". Reply with ONLY a JSON array of 4-6 chapters, no other text. Each chapter: {\"heading\": \"chapter title\", \"paragraphs\": [\"3-4 paragraphs of real, useful content\"]}. Write in Roman-script Hinglish. Practical, specific content \u2014 no prices, no discounts, no income or result promises, no fake claims.`\n  : `Write a document titled \"${title}\" about the topic \"${topic}\". Reply with ONLY a JSON array of 4-6 sections, no other text. Each section: {\"heading\": \"short heading\", \"paragraphs\": [\"2-3 useful paragraphs, plain text\"], \"bullets\": [\"up to 4 short bullets\"]}. Write in Roman-script Hinglish. Practical, specific content \u2014 no prices, no discounts, no income or result promises, no fake claims.`;\nreturn [{ json: { valid: true, type: 'document', format, payload, hasContent, topic, draftPrompt, demandKey: title, skipDemandCheck: body.skipDemandCheck === true, retries: 0 } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/discovery/problem-miner/latest",
+        "options": {
+          "timeout": 15000
+        },
+        "onError": "continueRegularOutput",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "name": "check-demand",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demand pre-check (plan guardrail #1): match topic/niche against the\n// weekly Problem Miner top-10 (GET latest). Never blocks when the miner\n// never ran or is unreachable \u2014 proceeds with a warning instead.\nconst r = $input.first().json;\nconst v = $('validate-input').first().json;\nconst skip = v.skipDemandCheck === true;\nconst key = String(v.demandKey ?? '');\nif (skip) return [{ json: { demandOk: true, demandNote: 'demand_check_skipped',\n  payload: v.payload, retries: 0, type: v.type } }];\nconst data = (r && r.ok === true && r.data) ? r.data : null;\nif (!data) return [{ json: { demandOk: true, demandNote: 'demand_not_checked',\n  payload: v.payload, retries: 0, type: v.type } }];\nif (data.mined !== true) return [{ json: { demandOk: true, demandNote: 'not_mined_yet',\n  payload: v.payload, retries: 0, type: v.type } }];\nconst words = key.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4);\nconst problems = (data.problems ?? []).map(p => String(p.text ?? ''));\nconst hits = problems.filter(t => words.some(w => t.toLowerCase().includes(w)));\nif (hits.length) return [{ json: { demandOk: true, demandNote: 'demand_matched',\n  matched: hits.slice(0, 3), payload: v.payload, retries: 0, type: v.type } }];\nreturn [{ json: { demandOk: false, demandNote: 'no_demand_match',\n  hints: problems.slice(0, 3), payload: v.payload, retries: 0, type: v.type } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "match-demand",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.demandOk }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "if-demand",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json; return [{ json: { ok:false, code:'needs_validation', error:'Is topic/niche ke liye mined problems me koi match nahi mila \\u2014 pehle demand validate karo ya skipDemandCheck:true bhejo.', hints: j.hints ?? [], demandNote: j.demandNote } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "build-needs-validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-needs-validation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nlet prev = null;\ntry { prev = $('bump-retry').first().json; } catch {}\nif (!prev) { try { prev = $('parse-draft').first().json; } catch {} }\nif (!prev) { try { prev = $('validate-input').first().json; } catch {} }\nprev = prev ?? {};\nlet demandNote = prev.demandNote ?? '';\nif (!demandNote) { try { demandNote = $('match-demand').first().json.demandNote ?? ''; } catch {} }\nconst retries = Number(prev.retries ?? 0);\nconst code = (r && r.code) || '';\nconst retryable = ['generation_failed','unavailable','internal_error','timeout','mine_failed'].includes(code)\n  || (r && r.ok !== true && !r.data && !code);\nif (r && r.ok === true && r.data) {\n  const d = r.data;\n  return [{ json: { ok: true, type: 'document', retries, demandNote,\n    payload: prev.payload ?? {},\n    format: prev.format ?? 'docx',\n    title: d.title ?? '', slug: d.slug ?? '', dir: d.dir ?? '',\n    file: d.file ?? null, count: d.count ?? 0, files: d.files ?? {}, warnings: d.warnings ?? [], } }];\n}\nreturn [{ json: { ok: false, type: 'document', retries, retryable,\n  demandNote, payload: prev.payload ?? {},\n  error: (r && (r.message ?? r.error)) || 'Generation failed', code: code || 'generation_failed', format: prev.format ?? 'docx' } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "normalize-result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "check-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.retryable }}",
+              "value2": true
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{ $json.retries }}",
+              "value2": 1,
+              "operation": "smaller"
+            }
+          ]
+        }
+      },
+      "name": "is-retryable",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 60,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "name": "wait-retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { payload: j.payload, retries: (Number(j.retries ?? 0) + 1),\n  demandNote: j.demandNote ?? '', type: j.type, format: j.format } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "bump-retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.hasContent }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "has-content",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/hub/run",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ task: { kind: 'long-doc', prompt: $json.draftPrompt, mode: 'pipeline' }, deliver: { format: 'text' } }) }}",
+        "options": {
+          "timeout": 300000
+        },
+        "onError": "continueRegularOutput",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "name": "draft-hub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Hub draft -> structured content for POST /api/v1/digital/docs.\n// Strict shape check: bad JSON or empty content fails loudly (no fake doc).\nconst r = $input.first().json;\nconst v = $('validate-input').first().json;\nconst format = v.format;\nconst contentKey = format === 'docx' ? 'sections' : format === 'pptx' ? 'slides' : 'chapters';\nconst text = (r && r.ok === true && r.data && r.data.output && r.data.output.text) ? String(r.data.output.text) : '';\nif (!text) throw new Error('Hub draft failed: no text returned');\nconst start = text.indexOf('[');\nconst end = text.lastIndexOf(']');\nif (start < 0 || end <= start) throw new Error('Hub draft failed: no JSON array found');\nlet arr;\ntry { arr = JSON.parse(text.slice(start, end + 1)); } catch { throw new Error('Hub draft failed: JSON parse nahi hua'); }\nif (!Array.isArray(arr) || arr.length === 0) throw new Error('Hub draft failed: empty content');\nconst max = format === 'pptx' ? 40 : 30;\nconst clean = arr.slice(0, max).map((it) => {\n  if (!it || typeof it !== 'object') return null;\n  const t = String(it.title ?? it.heading ?? '').trim();\n  if (!t) return null;\n  if (format === 'pptx') return { title: t,\n    bullets: (Array.isArray(it.bullets) ? it.bullets : []).map((b) => String(b).slice(0, 500)).slice(0, 8),\n    notes: String(it.notes ?? '').slice(0, 1000) || undefined };\n  if (format === 'docx') return { heading: t,\n    paragraphs: (Array.isArray(it.paragraphs) ? it.paragraphs : []).map((p) => String(p).slice(0, 4000)).slice(0, 40),\n    bullets: (Array.isArray(it.bullets) ? it.bullets : []).map((b) => String(b).slice(0, 500)).slice(0, 12) };\n  return { heading: t,\n    paragraphs: (Array.isArray(it.paragraphs) ? it.paragraphs : []).map((p) => String(p).slice(0, 4000)).slice(0, 40) };\n}).filter(Boolean);\nif (!clean.length) throw new Error('Hub draft failed: no usable sections');\nconst payload = { ...v.payload };\npayload[contentKey] = clean;\nreturn [{ json: { ...v, payload, retries: 0 } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "parse-draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/docs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 300000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "name": "call-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "check-demand",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-demand": {
+      "main": [
+        [
+          {
+            "node": "match-demand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "match-demand": {
+      "main": [
+        [
+          {
+            "node": "if-demand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-demand": {
+      "main": [
+        [
+          {
+            "node": "has-content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-needs-validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-needs-validation": {
+      "main": [
+        [
+          {
+            "node": "respond-needs-validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-api": {
+      "main": [
+        [
+          {
+            "node": "normalize-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-result": {
+      "main": [
+        [
+          {
+            "node": "check-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-ok": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "is-retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-retryable": {
+      "main": [
+        [
+          {
+            "node": "wait-retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-retry": {
+      "main": [
+        [
+          {
+            "node": "bump-retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "bump-retry": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "has-content": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "draft-hub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "draft-hub": {
+      "main": [
+        [
+          {
+            "node": "parse-draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "parse-draft": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "errorWorkflow": "digital-error-recovery"
+}

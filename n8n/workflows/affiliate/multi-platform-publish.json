@@ -1,0 +1,100 @@
+{
+  "name": "affiliate: multi-platform-publish",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Product payload in; omit 'platforms' to auto-route by fit.",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "affiliate/multi-publish"
+      },
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "id": "multi-publish",
+      "name": "multi-publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        300
+      ],
+      "notes": "Backend analyzes fit, publishes (Pinterest/LinkedIn), drafts X.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/multi-publish",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body ?? $json) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "log-results",
+      "name": "log-results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ],
+      "notes": "Logs per-platform outcomes; prints X drafts for manual posting.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Structured log of the multi-publish run. Drafts (X) are printed in full\n// so the operator can copy-paste them into the X app.\nconst body = $json.body ?? $json;\nconst data = body.data ?? body;\nconst results = Array.isArray(data.results) ? data.results : [];\nfor (const r of results) {\n  console.log(JSON.stringify({\n    event: 'multi_publish_result',\n    platform: r.platform, status: r.status, id: r.id ?? null,\n    reason: r.reason ?? null, at: new Date().toISOString(),\n  }));\n  if (r.status === 'draft' && r.text) console.log(`--- X DRAFT ---\\n${r.text}\\n---------------`);\n}\nreturn [{ product: data.product ?? null, results }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "multi-publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "multi-publish": {
+      "main": [
+        [
+          {
+            "node": "log-results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Analyze-then-promote: the backend ranks Pinterest/X/LinkedIn by product fit, publishes to Pinterest + LinkedIn via their free APIs, and returns an X draft (X API is pay-per-use since Feb 2026 \u2014 manual posting only). Needs BACKEND_URL, N8N_WEBHOOK_SECRET, and backend env for the platforms (PINTEREST_ACCESS_TOKEN/BOARD_ID, LINKEDIN_ACCESS_TOKEN/AUTHOR_URN)."
+}

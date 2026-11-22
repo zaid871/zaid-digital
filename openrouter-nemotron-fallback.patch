@@ -1,0 +1,489 @@
+# OpenRouter Nemotron fallback-lane patch — PENDING USER APPROVAL, do NOT apply until the user says yes.
+# Prepared 2026-11-10 (evening, after the unofficial Muse Spark / Meta AI WebSocket 400 dead-end):
+#   OpenRouter's two free Nemotron models are still live (verified 2026-11-10 against
+#   OpenRouter models API snapshots 8–9 Nov 2026 + 28 Oct–6 Nov benchmark, both 20/20):
+#   nvidia/nemotron-3-ultra-550b-a55b:free (reasoning) + nvidia/nemotron-3.5-super-vl:free (fast all-rounder).
+# What it changes (9 files): NEW src/lib/providers/openrouter.ts (OpenAI-compatible adapter,
+# OPENROUTER_API_KEY); fallbackLegs() in router.ts (sequential, AFTER Groq/Gemini legs pause —
+# never a 5th parallel leg, 4-leg cap untouched); dispatch in ensemble.ts; :free 50/day quota
+# in quota.ts (not 1,000); ensemble-branch fallback in run.ts; constants + TextProvider in
+# types.ts; key + overrides in .env.example; 8 new checks in scripts/test-hub.ts (41/41);
+# docs/unified-hub.md (fallback rule, deploy env, test counts).
+# What it does NOT change: Groq/Gemini defaults, ensemble order, pipeline/single modes
+# (fallback is ensemble-mode only), the pending Gemini patch (separate file, applies cleanly
+# in either order — verified 2026-11-10), the Groq default swap (separate, still pending).
+# Limits (honest): OpenRouter free = 20 RPM / 50 RPD — the lane is a fallback, not a new
+# parallel leg, so a busy day burns it fast; the free list ROTATES, re-check IDs at deploy;
+# single/pipeline modes and the all-legs-over-quota early return do not try the fallback yet.
+# Live caveat (NOT verifiable here): no OPENROUTER_API_KEY exists in this sandbox, so no real
+# Nemotron call has been made — first live call happens at deploy with the user's own key
+# (user creates it at openrouter.ai/keys, never in chat). Free tier, no cost, no card.
+# Apply from the repo root:  patch -p1 < openrouter-nemotron-fallback.patch
+# Verify:  npx tsx scripts/test-hub.ts   (stubbed caller, no key needed — 41/41)
+#          npx tsc --noEmit && npx eslint src/lib/providers/openrouter.ts src/lib/hub/*.ts scripts/test-hub.ts
+# After applying, delete this file.
+diff -ruN a/.env.example b/.env.example
+--- a/.env.example	2026-11-08 15:30:06.000000000 +0000
++++ b/.env.example	2026-11-10 13:34:16.924572119 +0000
+@@ -96,6 +96,15 @@
+ # Optional model override (default: llama-3.3-70b-versatile).
+ #GROQ_MODEL=
+ 
++# OpenRouter — free :free models, no card. Get a key: https://openrouter.ai/keys
++# Hub fallback lane ONLY: fires after all Groq/Gemini legs pause, never in parallel.
++# Free limits: 20 req/min, 50 req/day (1,000/day after $10 lifetime credits — optional, not needed).
++# Models verified free 2026-11-10 (OpenRouter models API, snapshots 8–9 Nov): Nemotron 3 Ultra + 3.5 Super VL.
++OPENROUTER_API_KEY=
++#HUB_OPENROUTER_ULTRA_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
++#HUB_OPENROUTER_SUPER_VL_MODEL=nvidia/nemotron-3.5-super-vl:free
++#HUB_OPENROUTER_DAILY_LIMIT=50
++
+ # Google Gemini — free tier via AI Studio, no card.
+ # Get a key: https://aistudio.google.com/apikey
+ # Used as the 4th (last) script fallback in the chain. Note: since 2026 Gemini
+@@ -117,6 +126,7 @@
+ #HUB_GEMINI_MODEL=gemini-2.0-flash
+ # Parallel text legs per ensemble run (budget cap, not preference; max live legs = 4).
+ HUB_ENSEMBLE_MAX=4
++# Fallback lane (OpenRouter Nemotron, sequential after ensemble, not counted in the 4): see OPENROUTER_API_KEY above.
+ # Text-lane timeout per leg in ms: a slow leg pauses, the run does not wait.
+ HUB_TEXT_TIMEOUT_MS=8000
+ # Code sandbox: docker (needs a Docker socket + node:20-alpine/python:3.12-alpine images on the VM) or off.
+diff -ruN a/docs/unified-hub.md b/docs/unified-hub.md
+--- a/docs/unified-hub.md	2026-11-06 18:07:57.000000000 +0000
++++ b/docs/unified-hub.md	2026-11-10 13:34:48.370334231 +0000
+@@ -2,7 +2,7 @@
+ 
+ > **BUILT 2026-11-06 (user: "ab tak humari jo baat hui un sb high possiblities ko shamil kr k wo api banao").**
+ > Combination level, user ke words me: **APIs ek gateway ke peeche merge hoti hain; models alag rehte hain; outputs ek Shared Power Pool (third place) me jama hote hain.**
+-> Built: `src/lib/hub/` (router, ensemble, pipeline, pool, sandbox, ledger, quota, engines, run) + endpoint `POST /api/v1/hub/run` (file: `src/app/api/v1/hub/run/route.ts` — route path `/api/v1/hub/run` hai, `/api/v1/hub` nahi) + `n8n/workflows/hub-run.json` + `scripts/hub-eval.ts` + `scripts/test-hub.ts` (**33/33 pass**, tsc/eslint/build green, endpoint live-tested on a local server: 422 validation, 200 no-keys honest fail, GET ledger 200).
++> Built: `src/lib/hub/` (router, ensemble, pipeline, pool, sandbox, ledger, quota, engines, run) + endpoint `POST /api/v1/hub/run` (file: `src/app/api/v1/hub/run/route.ts` — route path `/api/v1/hub/run` hai, `/api/v1/hub` nahi) + `n8n/workflows/hub-run.json` + `scripts/hub-eval.ts` + `scripts/test-hub.ts` (**41/41 pass**, tsc/eslint/build green, endpoint live-tested on a local server: 422 validation, 200 no-keys honest fail, GET ledger 200).
+ > NOT live-tested with real keys yet: no GROQ/GEMINI key in this sandbox, so no real ensemble/sandbox-pass run has happened — `hub-eval.ts` deploy par chalana hai, usse pehle koi quality number claim nahi karna. Deploy precondition wahi hai: backend VM par nahi hai (sirf n8n), Phase 1 handover baaki, Docker socket + images chahiye sandbox ke liye.
+ 
+ One central hub on the Oracle VM that combines everything from the Dream Team
+@@ -149,6 +149,13 @@
+   rate limits + ZeroGPU 5 GPU-min/day ledger + Pollinations shrinking scope.
+   On limit: typed `quota_exceeded`, never a silent fallback that pretends
+   success.
++- Fallback lane (OpenRouter Nemotron — patch pending approval, not
++  applied yet): when every Groq/Gemini ensemble leg pauses, the run
++  tries the two `:free` Nemotron legs sequentially (Ultra, then Super
++  VL) before failing with `all_legs_paused`. They are never in the
++  parallel fan-out, so the 4-leg cap is untouched, and their own quota
++  is 50/day (not 1,000). Without `OPENROUTER_API_KEY` the lane just
++  pauses and nothing changes. Single/pipeline modes do not use it yet.
+ 
+ ## 6. Verification layer — why this beats a single big model
+ 
+@@ -183,7 +190,7 @@
+ 
+ ## 8. What gets built, in order
+ 
+-1. **Hub core** — ✅ BUILT 2026-11-06: `src/lib/hub/router.ts`, `pipeline.ts`, `ensemble.ts` (Ensemble v2 fan-out + pause gates), `sandbox.ts` (Docker-isolated exec), `ledger.ts`, `pool.ts` (Shared Power Pool), `quota.ts`, `engines.ts`; endpoint `src/app/api/v1/hub/run/route.ts`. Tests: `scripts/test-hub.ts` 33/33 (router table, pause gates, pool, quota, compliance, sandbox-unavailable, no-keys honest fail, fake-caller ensemble run).
++1. **Hub core** — ✅ BUILT 2026-11-06: `src/lib/hub/router.ts`, `pipeline.ts`, `ensemble.ts` (Ensemble v2 fan-out + pause gates), `sandbox.ts` (Docker-isolated exec), `ledger.ts`, `pool.ts` (Shared Power Pool), `quota.ts`, `engines.ts`; endpoint `src/app/api/v1/hub/run/route.ts`. Tests: `scripts/test-hub.ts` 41/41 (router table, pause gates, pool, quota, compliance, sandbox-unavailable, no-keys honest fail, fake-caller ensemble run).
+ 2. **Docx/pptx** — ✅ BUILT 2026-11-06 (earlier the same day): `src/lib/digital/docs.ts` via the `pdf_bridge.py` pattern; endpoints through the hub (`deliver.format: docx/pptx`). Ebook/template reuse `src/lib/digital/` unchanged.
+ 3. **n8n wiring** — ✅ BUILT 2026-11-06: one workflow `n8n/workflows/hub-run.json`: webhook → validate (secret + kind/format) → `POST /api/v1/hub/run` (x-n8n-secret header) → respond with files/ledgerId. Statically validated (9 nodes, connections checked). NOT live-import-tested — deploy par n8n me import karna hai.
+ 4. **Eval + ledger dashboard** — ✅ Eval BUILT 2026-11-06: `scripts/hub-eval.ts` (10 fixed real tasks, pipeline vs ensemble vs single). NOT RUN yet — needs GROQ/GEMINI keys on the VM; without keys it refuses (exit 1) instead of printing zeros. Ledger read endpoint: `GET /api/v1/hub/run` (same route file, newest 20 rows). Dashboard UI still open.
+@@ -192,8 +199,9 @@
+ 
+ - Backend deploy is the precondition — today only n8n runs on the VM.
+   Needs the Phase 1 handover (VM IP, SSH key, n8n URL+login) already asked.
+-- Env: `GROQ_API_KEY`, `GEMINI_API_KEY` (load-bearing), `HUB_*_MODEL`
+-  (live-verified IDs), `x-n8n-secret`, `HF_TOKEN` optional.
++- Env: `GROQ_API_KEY`, `GEMINI_API_KEY` (load-bearing), `OPENROUTER_API_KEY`
++  (fallback lane only, optional — without it the Nemotron lane pauses),
++  `HUB_*_MODEL` (live-verified IDs), `x-n8n-secret`, `HF_TOKEN` optional.
+ - Sandbox: Docker socket available to the app container, no host exec.
+ - No local-PC step exists in this plan. There is nothing to install on the PC.
+ 
+diff -ruN a/scripts/test-hub.ts b/scripts/test-hub.ts
+--- a/scripts/test-hub.ts	2026-11-06 17:57:22.000000000 +0000
++++ b/scripts/test-hub.ts	2026-11-10 13:34:25.982572471 +0000
+@@ -13,8 +13,8 @@
+ // Isolated storage so tests never touch storage/hub.
+ process.env.HUB_STORAGE_DIR = mkdtempSync(join(tmpdir(), "hub-test-"));
+ 
+-import { HubError } from "../src/lib/hub/types";
+-import { routeTask, ensembleLegs } from "../src/lib/hub/router";
++import { HubError, LIVE_OPENROUTER_SUPER_VL, LIVE_OPENROUTER_ULTRA } from "../src/lib/hub/types";
++import { routeTask, ensembleLegs, fallbackLegs } from "../src/lib/hub/router";
+ import { fanOut, synthesizeCode } from "../src/lib/hub/ensemble";
+ import { deposit, draw } from "../src/lib/hub/pool";
+ import { checkQuota, recordUse, setQuotaCount } from "../src/lib/hub/quota";
+@@ -50,6 +50,10 @@
+   check("synth is gpt-oss-120b", codePlan.synth.model === "openai/gpt-oss-120b");
+   check("no retired llama/deepseek id in legs", !codePlan.legs.some((l) => /llama-3|deepseek/i.test(l.model)));
+   check("ensembleLegs() respects cap", ensembleLegs().length <= 4);
++  const fbLegs = fallbackLegs();
++  check("fallback lane is 2 OpenRouter legs", fbLegs.length === 2 && fbLegs.every((l) => l.provider === "openrouter"));
++  check("fallback models are the verified :free Nemotron IDs", fbLegs[0].model === LIVE_OPENROUTER_ULTRA && fbLegs[1].model === LIVE_OPENROUTER_SUPER_VL);
++  check("ensemble legs never include the fallback lane", !ensembleLegs().some((l) => l.provider === "openrouter"));
+   const chatPlan = routeTask("chat", undefined, "text");
+   check("chat -> single fast 20b", chatPlan.mode === "single" && chatPlan.legs[0].model === "openai/gpt-oss-20b");
+   const imgPlan = routeTask("image", undefined, "image");
+@@ -101,6 +105,12 @@
+   setQuotaCount(model, 1000);
+   check("quota blocks at limit", !checkQuota(model).allowed && checkQuota(model).remaining === 0);
+   setQuotaCount(model, 0);
++  const freeModel = LIVE_OPENROUTER_ULTRA;
++  setQuotaCount(freeModel, 49);
++  check("openrouter :free cap is 50/day", checkQuota(freeModel).allowed && checkQuota(freeModel).remaining === 1);
++  setQuotaCount(freeModel, 50);
++  check(":free leg pauses at 50", !checkQuota(freeModel).allowed && checkQuota(freeModel).remaining === 0);
++  setQuotaCount(freeModel, 0);
+ 
+   console.log("compliance scan");
+   check("price text rejected", scanCompliance("Sirf ₹499 me le lo, 50% off!").status === "rejected");
+@@ -131,6 +141,19 @@
+   check("ensemble pool has deposits", ens.pool.deposits >= 4);
+   check("ensemble ledger row exists", readLedger(5).some((e) => e.runId === ens.runId && e.ok));
+ 
++  console.log("runHub ensemble falls back to OpenRouter when Groq/Gemini pause");
++  const fallbackCaller = async (leg: { id: string; provider: string }) => {
++    if (leg.provider === "openrouter") return { text: `Nemotron draft from ${leg.id} — mehnat, seekhna aur sabr, teeno zaroori hain.`, durationMs: 5 };
++    throw new Error("primary leg down");
++  };
++  const fbRun = await runHub(
++    { task: { kind: "reasoning", prompt: "Kaamyabi ke 3 usool batao." }, deliver: { format: "text" } },
++    { caller: fallbackCaller }
++  );
++  check("fallback run ok with Nemotron text", fbRun.ok && (fbRun.output.text ?? "").startsWith("Nemotron draft"));
++  check("fallback run used a :free model", fbRun.usage.models.some((m) => m.endsWith(":free")));
++  check("fallback run ledgered", readLedger(5).some((e) => e.runId === fbRun.runId && e.ok));
++
+   console.log(`\n${passed} passed, ${failed} failed`);
+   if (failed > 0) process.exit(1);
+ }
+diff -ruN a/src/lib/hub/ensemble.ts b/src/lib/hub/ensemble.ts
+--- a/src/lib/hub/ensemble.ts	2026-11-06 17:56:29.000000000 +0000
++++ b/src/lib/hub/ensemble.ts	2026-11-10 13:33:58.415571401 +0000
+@@ -14,6 +14,7 @@
+  */
+ import { generateText as groqText } from "../providers/groq";
+ import { generateText as geminiText } from "../providers/gemini";
++import { generateText as openrouterText } from "../providers/openrouter";
+ import { checkQuota, recordUse } from "./quota";
+ import {
+   QWEN_FALLBACK_MODEL,
+@@ -90,7 +91,9 @@
+     const res =
+       leg.provider === "groq"
+         ? await groqText({ prompt, maxTokens: opts.maxTokens ?? 1024, temperature: opts.temperature ?? 0.7, model })
+-        : await geminiText({ prompt, maxTokens: opts.maxTokens ?? 1024, temperature: opts.temperature ?? 0.7, model });
++        : leg.provider === "openrouter"
++          ? await openrouterText({ prompt, maxTokens: opts.maxTokens ?? 1024, temperature: opts.temperature ?? 0.7, model })
++          : await geminiText({ prompt, maxTokens: opts.maxTokens ?? 1024, temperature: opts.temperature ?? 0.7, model });
+     recordUse(model);
+     if (!res.ok) return { failed: true, detail: res.error.message, durationMs: Date.now() - started };
+     return { failed: false, text: res.data, durationMs: Date.now() - started };
+diff -ruN a/src/lib/hub/quota.ts b/src/lib/hub/quota.ts
+--- a/src/lib/hub/quota.ts	2026-11-06 17:53:20.000000000 +0000
++++ b/src/lib/hub/quota.ts	2026-11-10 13:34:06.355571709 +0000
+@@ -2,7 +2,9 @@
+  * Hub quota guard — Groq free-tier daily allowances, enforced BEFORE the
+  * call, never after (spec §5). Each live text model gets its own
+  * allowance (30 RPM / 1,000 RPD / 8,000 TPM per model, verified
+- * 2026-11-06). This guard tracks requests/day per model in
++ * 2026-11-06). OpenRouter `:free` models are the exception: their cap
++ * is 20 RPM / 50 RPD (verified 2026-11-10), so they get their own
++ * lower limit below. This guard tracks requests/day per model in
+  * storage/hub/quota.json. On limit the leg is paused with typed
+  * `quota_exceeded` — never a silent fallback that pretends success.
+  *
+@@ -17,6 +19,9 @@
+ 
+ export const HUB_DAILY_REQUEST_LIMIT = 1000;
+ 
++/** OpenRouter :free daily cap (20 RPM / 50 RPD; 1,000 RPD only after $10 lifetime credits). */
++export const OPENROUTER_DAILY_REQUEST_LIMIT = 50;
++
+ export function hubDir(): string {
+   return process.env.HUB_STORAGE_DIR || join(process.cwd(), "storage", "hub");
+ }
+@@ -57,11 +62,18 @@
+   return envInt("HUB_DAILY_REQUEST_LIMIT", HUB_DAILY_REQUEST_LIMIT);
+ }
+ 
++/** Per-model daily limit: `:free` models get the OpenRouter cap (50), everything else the Groq cap. */
++function limitFor(model: string): number {
++  return model.endsWith(":free")
++    ? envInt("HUB_OPENROUTER_DAILY_LIMIT", OPENROUTER_DAILY_REQUEST_LIMIT)
++    : dailyLimit();
++}
++
+ /** Check a model before calling it. Never throws — a broken counter file means "allow", logged by the caller via `remaining: -1`. */
+ export function checkQuota(model: string): { allowed: boolean; remaining: number } {
+   const data = readQuotaFile();
+   const used = data.counts[model] ?? 0;
+-  const limit = dailyLimit();
++  const limit = limitFor(model);
+   return { allowed: used < limit, remaining: Math.max(0, limit - used) };
+ }
+ 
+diff -ruN a/src/lib/hub/router.ts b/src/lib/hub/router.ts
+--- a/src/lib/hub/router.ts	2026-11-06 17:53:42.000000000 +0000
++++ b/src/lib/hub/router.ts	2026-11-10 13:33:52.411571168 +0000
+@@ -15,6 +15,8 @@
+   LIVE_GROQ_120B,
+   LIVE_GROQ_20B,
+   LIVE_GROQ_QWEN,
++  LIVE_OPENROUTER_SUPER_VL,
++  LIVE_OPENROUTER_ULTRA,
+   type DeliverFormat,
+   type HubLane,
+   type HubMode,
+@@ -51,6 +53,12 @@
+ export function geminiModel(): string {
+   return envOr("HUB_GEMINI_MODEL", LIVE_GEMINI_FLASH);
+ }
++export function openrouterUltraModel(): string {
++  return envOr("HUB_OPENROUTER_ULTRA_MODEL", LIVE_OPENROUTER_ULTRA);
++}
++export function openrouterSuperVLModel(): string {
++  return envOr("HUB_OPENROUTER_SUPER_VL_MODEL", LIVE_OPENROUTER_SUPER_VL);
++}
+ export function ensembleMax(): number {
+   return envInt("HUB_ENSEMBLE_MAX", 4);
+ }
+@@ -58,9 +66,14 @@
+   return envInt("HUB_TEXT_TIMEOUT_MS", 8000);
+ }
+ 
+-/** Provider follows the model id: gemini-* runs on Gemini, everything else on Groq. */
++/** Provider follows the model id: gemini-* runs on Gemini, :free / nvidia-* on OpenRouter, everything else on Groq. */
+ export function legFor(id: string, model: string): TextLeg {
+-  return { id, provider: model.startsWith("gemini") ? "gemini" : "groq", model };
++  const provider: TextLeg["provider"] = model.startsWith("gemini")
++    ? "gemini"
++    : model.endsWith(":free") || model.startsWith("nvidia/")
++      ? "openrouter"
++      : "groq";
++  return { id, provider, model };
+ }
+ 
+ /** All live text legs, in fan-out order, capped by HUB_ENSEMBLE_MAX (budget rule, not preference). */
+@@ -80,6 +93,20 @@
+   return deduped.slice(0, Math.max(1, ensembleMax()));
+ }
+ 
++/**
++ * Fallback lane — OpenRouter Nemotron, fired SEQUENTIALLY only after
++ * every Groq/Gemini ensemble leg paused (run.ts). Never part of the
++ * parallel fan-out, so the 4-leg cap (HUB_ENSEMBLE_MAX) is untouched.
++ * Order: Ultra first (strongest free reasoning), Super VL second
++ * (fastest free all-rounder).
++ */
++export function fallbackLegs(): TextLeg[] {
++  return [
++    legFor("openrouter-ultra", openrouterUltraModel()),
++    legFor("openrouter-supervl", openrouterSuperVLModel()),
++  ];
++}
++
+ const ENGINE_KINDS: Record<string, DeliverFormat> = {
+   image: "image",
+   video: "video",
+diff -ruN a/src/lib/hub/run.ts b/src/lib/hub/run.ts
+--- a/src/lib/hub/run.ts	2026-11-06 17:57:22.000000000 +0000
++++ b/src/lib/hub/run.ts	2026-11-10 13:34:12.003571928 +0000
+@@ -22,7 +22,7 @@
+ import { appendLedger } from "./ledger";
+ import { deposit } from "./pool";
+ import { checkQuota } from "./quota";
+-import { ensembleLegs, routeTask, textTimeoutMs, legFor, buildModel, synthModel } from "./router";
++import { ensembleLegs, fallbackLegs, routeTask, textTimeoutMs, legFor, buildModel, synthModel } from "./router";
+ import { callTextLeg, fanOut, synthesizeCode, synthesizeText, type TextCaller } from "./ensemble";
+ import { runPipeline } from "./pipeline";
+ import { runInSandbox } from "./sandbox";
+@@ -205,13 +205,25 @@
+     const lane = isCode ? "code" : "text";
+ 
+     if (plan.mode === "ensemble") {
+-      const fan = await fanOut(legs, prompt, { timeoutMs: textTimeoutMs(), lane, caller: deps.caller });
++      let fan = await fanOut(legs, prompt, { timeoutMs: textTimeoutMs(), lane, caller: deps.caller });
+       deposits += depositAll(runId, fan.contributions, lane);
++      if (fan.survivors.length === 0) {
++        // Fallback lane: OpenRouter Nemotron, SEQUENTIALLY after every
++        // Groq/Gemini leg paused — never a 5th parallel leg, so the
++        // 4-leg cap is untouched. Quota-filtered (50/day free cap); a
++        // missing OPENROUTER_API_KEY just pauses these legs too.
++        const fbLegs = fallbackLegs().filter((leg) => checkQuota(leg.model).allowed);
++        if (fbLegs.length > 0) {
++          const fb = await fanOut(fbLegs, prompt, { timeoutMs: textTimeoutMs(), lane, caller: deps.caller });
++          deposits += depositAll(runId, fb.contributions, lane);
++          fan = { contributions: [...fan.contributions, ...fb.contributions], survivors: fb.survivors };
++        }
++      }
+       const usedModels = fan.contributions.map((c) => c.model);
+       if (fan.survivors.length === 0) {
+         return finish(false, { kind: format === "code" ? "code" : "text" }, usedModels, fan.contributions.length, {
+           code: "all_legs_paused",
+-          message: `Every text leg paused (${fan.contributions.map((c) => `${c.legId}:${c.pauseReason ?? "error"}`).join(", ")}). Check GROQ_API_KEY / GEMINI_API_KEY and the ledger.`,
++          message: `Every text leg paused (${fan.contributions.map((c) => `${c.legId}:${c.pauseReason ?? "error"}`).join(", ")}). OpenRouter fallback legs also paused or unavailable — check GROQ_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY and the ledger.`,
+         });
+       }
+       let text: string;
+diff -ruN a/src/lib/hub/types.ts b/src/lib/hub/types.ts
+--- a/src/lib/hub/types.ts	2026-11-06 17:53:06.000000000 +0000
++++ b/src/lib/hub/types.ts	2026-11-10 13:33:40.996570725 +0000
+@@ -11,6 +11,8 @@
+  * Groq free text legs are openai/gpt-oss-120b, openai/gpt-oss-20b and
+  * qwen/qwen3.8-27b (Preview). Llama 3.1/3.3 are Enterprise-only and
+  * DeepSeek-R1-Distill-Llama-70B is retired — never ship those IDs.
++ * OpenRouter fallback IDs (verified free 2026-11-10, models API
++ * snapshots 8–9 Nov): Nemotron 3 Ultra + 3.5 Super VL, both `:free`.
+  * Model IDs are env config, never hardcoded into a call: the constants
+  * below are only the defaults when the env var is unset.
+  */
+@@ -25,6 +27,10 @@
+ /** Fallback when the Qwen Preview model 404s (spec §10). */
+ export const QWEN_FALLBACK_MODEL = LIVE_GROQ_120B;
+ 
++/** OpenRouter :free fallback lane (verified free 2026-11-10; 50 req/day cap). */
++export const LIVE_OPENROUTER_ULTRA = "nvidia/nemotron-3-ultra-550b-a55b:free";
++export const LIVE_OPENROUTER_SUPER_VL = "nvidia/nemotron-3.5-super-vl:free";
++
+ export function envOr(name: string, fallback: string): string {
+   const v = process.env[name];
+   return v && v.trim().length > 0 ? v.trim() : fallback;
+@@ -107,7 +113,7 @@
+ /** One lane of a run — only lanes the prompt asks for are opened (§11). */
+ export type HubLane = "text" | "code" | "visual" | "doc" | "video";
+ 
+-export type TextProvider = "groq" | "gemini";
++export type TextProvider = "groq" | "gemini" | "openrouter";
+ 
+ export interface TextLeg {
+   /** Stable id, e.g. "groq-120b". */
+diff -ruN a/src/lib/providers/openrouter.ts b/src/lib/providers/openrouter.ts
+--- a/src/lib/providers/openrouter.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/src/lib/providers/openrouter.ts	2026-11-10 13:33:34.320570466 +0000
+@@ -0,0 +1,128 @@
++/**
++ * OpenRouter text adapter — free `:free` models only, OpenAI-compatible
++ * chat completions.
++ *
++ * Endpoint: POST https://openrouter.ai/api/v1/chat/completions
++ * Free tier (per OpenRouter docs): 20 RPM, 50 requests/day; 1,000/day
++ * only after $10 lifetime credits — that threshold is optional and is
++ * NOT needed for the hub fallback lane, so never present it as a step.
++ * Requires a free OPENROUTER_API_KEY (user creates it at
++ * openrouter.ai/keys, no card; never in chat).
++ *
++ * The free list ROTATES: IDs live in the hub as env config
++ * (HUB_OPENROUTER_*_MODEL), never hardcoded into a call. Verified free
++ * 2026-11-10 (OpenRouter models API snapshots, 8–9 Nov 2026):
++ * nvidia/nemotron-3-ultra-550b-a55b:free (550B MoE, 1M context,
++ * strongest free reasoning) and nvidia/nemotron-3.5-super-vl:free
++ * (120B/12B active MoE, 1M context, fastest free all-rounder —
++ * 20/20 answered in the 28 Oct–6 Nov 2026 benchmark). Re-check the
++ * live list at deploy; a rotated ID fails honestly as unavailable.
++ */
++import { z } from "zod";
++import {
++  backoffDelayMs,
++  errResult,
++  okResult,
++  requireEnv,
++  sleep,
++  type ProviderResult,
++} from "./types";
++
++export const PROVIDER_KEY = "openrouter";
++
++const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
++
++const GenerateTextInputSchema = z.object({
++  prompt: z.string().min(1).max(8000),
++  maxTokens: z.number().int().min(64).max(4096).default(1024),
++  temperature: z.number().min(0).max(2).default(0.7),
++  model: z.string().min(1).optional(),
++});
++
++const MAX_RETRIES = 2;
++const TIMEOUT_MS = 60_000;
++
++export function isConfigured(): boolean {
++  return requireEnv("OPENROUTER_API_KEY") !== null;
++}
++
++export function defaultModel(): string {
++  return process.env.OPENROUTER_MODEL || "nvidia/nemotron-3.5-super-vl:free";
++}
++
++export async function generateText(
++  input: z.input<typeof GenerateTextInputSchema>
++): Promise<ProviderResult<string>> {
++  const parsed = GenerateTextInputSchema.safeParse(input);
++  if (!parsed.success) {
++    return errResult(PROVIDER_KEY, {
++      code: "invalid_input",
++      message: "Invalid text-generation input.",
++      retryable: false,
++    });
++  }
++  const apiKey = requireEnv("OPENROUTER_API_KEY");
++  if (!apiKey) {
++    return errResult(PROVIDER_KEY, {
++      code: "not_configured",
++      message: "Missing OPENROUTER_API_KEY — create a free key at openrouter.ai/keys.",
++      retryable: false,
++    });
++  }
++  const { prompt, maxTokens, temperature } = parsed.data;
++  const model = parsed.data.model || defaultModel();
++  const started = Date.now();
++  let lastDetail = "";
++
++  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
++    try {
++      const res = await fetch(ENDPOINT, {
++        method: "POST",
++        headers: {
++          "content-type": "application/json",
++          authorization: `Bearer ${apiKey}`,
++        },
++        body: JSON.stringify({
++          model,
++          messages: [{ role: "user", content: prompt }],
++          max_tokens: maxTokens,
++          temperature,
++        }),
++        signal: controller.signal,
++      });
++      clearTimeout(timer);
++      if (res.status === 429) {
++        lastDetail = "http=429 rate limited";
++        if (attempt < MAX_RETRIES) await sleep(backoffDelayMs(attempt, 3000, 30000));
++        continue;
++      }
++      if (!res.ok) {
++        lastDetail = `http=${res.status}`;
++        if (attempt < MAX_RETRIES) await sleep(backoffDelayMs(attempt, 2000, 20000));
++        continue;
++      }
++      const body = (await res.json()) as {
++        choices?: Array<{ message?: { content?: string } }>;
++      };
++      const content = body.choices?.[0]?.message?.content?.trim();
++      if (!content) {
++        lastDetail = "empty choices in response";
++        if (attempt < MAX_RETRIES) await sleep(backoffDelayMs(attempt, 2000, 20000));
++        continue;
++      }
++      return okResult(PROVIDER_KEY, content, { model, durationMs: Date.now() - started });
++    } catch (err) {
++      clearTimeout(timer);
++      const msg = err instanceof Error ? err.message : String(err);
++      lastDetail = msg.includes("abort") ? "timeout" : msg.slice(0, 120);
++      if (attempt < MAX_RETRIES) await sleep(backoffDelayMs(attempt, 2000, 20000));
++    }
++  }
++  return errResult(PROVIDER_KEY, {
++    code: "unavailable",
++    message: `OpenRouter did not return text after ${MAX_RETRIES + 1} attempts. Last: ${lastDetail}`,
++    retryable: true,
++  });
++}

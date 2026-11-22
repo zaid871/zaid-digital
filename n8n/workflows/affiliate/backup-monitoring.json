@@ -1,0 +1,273 @@
+{
+  "name": "affiliate-backup-monitoring",
+  "description": "§18.16 Backup & Monitoring (§20): daily health/usage/provider checks via REAL backend endpoints, quota-near-limit alerts, DB backup verification TODO.",
+  "nodes": [
+    {
+      "id": "schedule-daily-mon",
+      "name": "schedule-daily-mon",
+      "notes": "Daily monitoring 07:00 Asia/Kolkata (n8n instance TZ must be Asia/Kolkata).",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "position": [
+        100,
+        300
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2
+    },
+    {
+      "id": "check-health",
+      "name": "check-health",
+      "notes": "REAL: backend health.",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/health",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        320,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "check-usage",
+      "name": "check-usage",
+      "notes": "REAL: usage/accounting for quota monitoring (§20).",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/usage",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        540,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "check-providers",
+      "name": "check-providers",
+      "notes": "REAL: provider health (HF, TTS, etc.) for generation quota checks (§20).",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/providers",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "position": [
+        760,
+        300
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "evaluate",
+      "name": "evaluate",
+      "notes": "Evaluates health/usage/providers; quota-near-limit → alert. DB backup verification is an explicit TODO (no endpoint).",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const h = $('check-health').first().json;\nconst u = $('check-usage').first().json;\nconst p = $('check-providers').first().json;\nconst alerts = [];\nif (!h.ok) alerts.push({ level: 'critical', msg: 'backend health check failed' });\nconst usage = u.data ?? u;\nif (usage && typeof usage === 'object') {\n  // Heuristic: any usage ratio field >= 0.9 triggers a warning (§22).\n  for (const [k, v] of Object.entries(usage))\n    if (/ratio|percent|used/i.test(k) && typeof v === 'number' && v >= 0.9)\n      alerts.push({ level: 'warning', msg: 'quota near limit: ' + k });\n}\nconst providers = p.data ?? p.providers ?? [];\nif (Array.isArray(providers))\n  for (const pr of providers)\n    if (pr.status && pr.status !== 'ok' && pr.status !== 'healthy')\n      alerts.push({ level: 'warning', msg: 'provider unhealthy: ' + (pr.name ?? pr.id) });\n// DB backup verification is TODO: no backend endpoint exposes backup status yet.\n// Required: nightly pg_dump of postgres_data (§19, §20, §21) — tracked here.\nalerts.push({ level: 'info',\n  msg: 'TODO: verify nightly pg_dump backup recency (no endpoint yet)' });\nreturn [{ json: { alerts, hasAlerts: alerts.some(a => a.level !== 'info'),\n  checkedAt: new Date().toISOString() } }];"
+      },
+      "position": [
+        980,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "if-alerts",
+      "name": "if-alerts",
+      "notes": "Alerts → notify. Else log ok.",
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.hasAlerts }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "position": [
+        1200,
+        300
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1
+    },
+    {
+      "id": "notify",
+      "name": "notify",
+      "notes": "Alert record (§20: error notifications). Channel wiring is TODO.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.error('[monitoring] ALERTS', JSON.stringify(j.alerts));\n// TODO: wire to notification channel (email/Telegram) via $env.ALERT_WEBHOOK_URL.\nreturn [{ json: { alerted: True, alerts: j.alerts,\n  todo: 'wire ALERT_WEBHOOK_URL notification channel' } }];"
+      },
+      "position": [
+        1420,
+        140
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-ok",
+      "name": "log-ok",
+      "notes": "All-clear log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[monitoring] all clear'); return [$input.first()];"
+      },
+      "position": [
+        1420,
+        460
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "log-done",
+      "name": "log-done",
+      "notes": "Monitoring run log.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "console.log('[monitoring] done'); return [$input.first()];"
+      },
+      "position": [
+        1640,
+        300
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "schedule-daily-mon": {
+      "main": [
+        [
+          {
+            "node": "check-health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-health": {
+      "main": [
+        [
+          {
+            "node": "check-usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-usage": {
+      "main": [
+        [
+          {
+            "node": "check-providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-providers": {
+      "main": [
+        [
+          {
+            "node": "evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "evaluate": {
+      "main": [
+        [
+          {
+            "node": "if-alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-alerts": {
+      "main": [
+        [
+          {
+            "node": "notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "notify": {
+      "main": [
+        [
+          {
+            "node": "log-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log-ok": {
+      "main": [
+        [
+          {
+            "node": "log-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "requiredEnv": [
+    "BACKEND_URL",
+    "N8N_WEBHOOK_SECRET"
+  ],
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "errorWorkflow": "affiliate-error-recovery"
+}

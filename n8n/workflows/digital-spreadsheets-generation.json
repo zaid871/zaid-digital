@@ -1,0 +1,536 @@
+{
+  "name": "digital-spreadsheets-generation",
+  "pinData": {},
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-spreadsheets-generation"
+      },
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "dace44f2-0a27-54cb-8eb0-5a0862395097"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\n\nconst title = String(body.title ?? '').trim();\nif (title.length < 3) return [{ json: { valid: false, error: 'title (min 3 chars) zaroori hai' } }];\nconst kind = String(body.kind ?? '').trim().toLowerCase();\nconst kinds = ['budget','expense','inventory','sales','attendance','profit','workout','onboarding'];\nconst hasSheets = Array.isArray(body.sheets) && body.sheets.length > 0;\nif (!hasSheets && !kinds.includes(kind)) return [{ json: { valid: false, error: 'sheets do, ya kind: budget/expense/inventory/sales/attendance/profit/workout/onboarding' } }];\nconst payload = { title };\nif (hasSheets) payload.sheets = body.sheets;\nreturn [{ json: { valid: true, type: 'spreadsheet', payload, hasSheets, kind: hasSheets ? '' : kind, demandKey: title, skipDemandCheck: body.skipDemandCheck === true, retries: 0 } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/discovery/problem-miner/latest",
+        "options": {
+          "timeout": 15000
+        },
+        "onError": "continueRegularOutput",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "name": "check-demand",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demand pre-check (plan guardrail #1): match topic/niche against the\n// weekly Problem Miner top-10 (GET latest). Never blocks when the miner\n// never ran or is unreachable \u2014 proceeds with a warning instead.\nconst r = $input.first().json;\nconst v = $('validate-input').first().json;\nconst skip = v.skipDemandCheck === true;\nconst key = String(v.demandKey ?? '');\nif (skip) return [{ json: { demandOk: true, demandNote: 'demand_check_skipped',\n  payload: v.payload, retries: 0, type: v.type } }];\nconst data = (r && r.ok === true && r.data) ? r.data : null;\nif (!data) return [{ json: { demandOk: true, demandNote: 'demand_not_checked',\n  payload: v.payload, retries: 0, type: v.type } }];\nif (data.mined !== true) return [{ json: { demandOk: true, demandNote: 'not_mined_yet',\n  payload: v.payload, retries: 0, type: v.type } }];\nconst words = key.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4);\nconst problems = (data.problems ?? []).map(p => String(p.text ?? ''));\nconst hits = problems.filter(t => words.some(w => t.toLowerCase().includes(w)));\nif (hits.length) return [{ json: { demandOk: true, demandNote: 'demand_matched',\n  matched: hits.slice(0, 3), payload: v.payload, retries: 0, type: v.type } }];\nreturn [{ json: { demandOk: false, demandNote: 'no_demand_match',\n  hints: problems.slice(0, 3), payload: v.payload, retries: 0, type: v.type } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "match-demand",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.demandOk }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "if-demand",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json; return [{ json: { ok:false, code:'needs_validation', error:'Is topic/niche ke liye mined problems me koi match nahi mila \\u2014 pehle demand validate karo ya skipDemandCheck:true bhejo.', hints: j.hints ?? [], demandNote: j.demandNote } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "build-needs-validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-needs-validation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nlet prev = null;\ntry { prev = $('bump-retry').first().json; } catch {}\nif (!prev) { try { prev = $('build-bank').first().json; } catch {} }\nif (!prev) { try { prev = $('validate-input').first().json; } catch {} }\nprev = prev ?? {};\nlet demandNote = prev.demandNote ?? '';\nif (!demandNote) { try { demandNote = $('match-demand').first().json.demandNote ?? ''; } catch {} }\nconst retries = Number(prev.retries ?? 0);\nconst code = (r && r.code) || '';\nconst retryable = ['generation_failed','unavailable','internal_error','timeout','mine_failed'].includes(code)\n  || (r && r.ok !== true && !r.data && !code);\nif (r && r.ok === true && r.data) {\n  const d = r.data;\n  return [{ json: { ok: true, type: 'spreadsheet', retries, demandNote,\n    payload: prev.payload ?? {},\n    title: d.title ?? '', slug: d.slug ?? '', dir: d.dir ?? '',\n    file: d.file ?? null, count: d.count ?? 0, files: d.files ?? {}, warnings: d.warnings ?? [], } }];\n}\nreturn [{ json: { ok: false, type: 'spreadsheet', retries, retryable,\n  demandNote, payload: prev.payload ?? {},\n  error: (r && (r.message ?? r.error)) || 'Generation failed', code: code || 'generation_failed' } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "normalize-result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "check-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.retryable }}",
+              "value2": true
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{ $json.retries }}",
+              "value2": 1,
+              "operation": "smaller"
+            }
+          ]
+        }
+      },
+      "name": "is-retryable",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 60,
+        "resume": "afterTimeInterval",
+        "unit": "seconds"
+      },
+      "name": "wait-retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nreturn [{ json: { payload: j.payload, retries: (Number(j.retries ?? 0) + 1),\n  demandNote: j.demandNote ?? '', type: j.type, format: j.format } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "bump-retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "respond-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.hasSheets }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "has-sheets",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic tracker templates: headers + example rows + working\n// formulas (strings starting with '=' \u2014 openpyxl stores them as real\n// formulas, so SUMs keep working in Excel/Sheets).\nconst v = $('validate-input').first().json;\nconst kind = v.kind;\nconst BANKS = {\n  budget: { sheets: [{ name: 'Budget', headers: ['Category','Budgeted','Actual','Difference'], rows: [\n    ['Rent', 15000, 15000, '=B3-C3'],\n    ['Groceries', 8000, 7200, '=B4-C4'],\n    ['Transport', 3000, 3400, '=B5-C5'],\n    ['Utilities', 2500, 2300, '=B6-C6'],\n    ['Savings', 5000, 5000, '=B7-C7'],\n    ['Other', 2000, 1500, '=B8-C8'],\n    ['TOTAL', '=SUM(B3:B8)', '=SUM(C3:C8)', '=SUM(D3:D8)'],\n  ]}] },\n  expense: { sheets: [{ name: 'Expenses', headers: ['Date','Category','Description','Amount'], rows: [\n    ['2026-11-01','Groceries','Weekly shop', 2450],\n    ['2026-11-02','Transport','Metro card', 500],\n    ['2026-11-03','Food','Lunch', 350],\n    ['2026-11-05','Utilities','Electricity', 1200],\n    ['2026-11-07','Health','Pharmacy', 800],\n    ['TOTAL','','','=SUM(D3:D7)'],\n  ]}] },\n  inventory: { sheets: [{ name: 'Inventory', headers: ['Item','SKU','Stock','Reorder Level','Price','Value'], rows: [\n    ['T-shirt Black','TS-BLK-01', 48, 20, 499, '=C3*E3'],\n    ['T-shirt White','TS-WHT-01', 35, 20, 499, '=C4*E4'],\n    ['Mug','MUG-01', 60, 25, 299, '=C5*E5'],\n    ['Notebook','NB-01', 120, 50, 199, '=C6*E6'],\n    ['TOTAL','','','','','=SUM(F3:F6)'],\n  ]}] },\n  sales: { sheets: [{ name: 'Sales', headers: ['Date','Product','Qty','Price','Total'], rows: [\n    ['2026-11-01','Ebook', 3, 499, '=C3*D3'],\n    ['2026-11-02','Template Pack', 2, 799, '=C4*D4'],\n    ['2026-11-03','Ebook', 1, 499, '=C5*D5'],\n    ['2026-11-04','Planner', 4, 299, '=C6*D6'],\n    ['TOTAL','','','','=SUM(E3:E6)'],\n  ]}] },\n  attendance: { sheets: [{ name: 'Attendance', headers: ['Employee','Date','Status','Hours'], rows: [\n    ['Ayesha','2026-11-03','Present', 8],\n    ['Bilal','2026-11-03','Present', 8],\n    ['Ayesha','2026-11-04','Present', 7.5],\n    ['Bilal','2026-11-04','Leave', 0],\n    ['TOTAL','','','=SUM(D3:D6)'],\n  ]}] },\n  profit: { sheets: [{ name: 'Profit', headers: ['Month','Revenue','Expenses','Profit'], rows: [\n    ['Jan', 25000, 12000, '=B3-C3'],\n    ['Feb', 32000, 14000, '=B4-C4'],\n    ['Mar', 28000, 13000, '=B5-C5'],\n    ['TOTAL', '=SUM(B3:B5)', '=SUM(C3:C5)', '=SUM(D3:D5)'],\n  ]}] },\n  workout: { sheets: [\n    { name: 'Workout Log', headers: ['Date','Exercise','Sets','Reps','Weight (kg)','Notes'], rows: [\n      ['2026-11-10','Squats', 4, 10, 60, ''],\n      ['2026-11-10','Bench Press', 4, 8, 50, ''],\n      ['2026-11-11','Deadlift', 3, 6, 80, ''],\n      ['2026-11-11','Pull-ups', 3, 8, 0, 'Bodyweight'],\n      ['2026-11-12','Overhead Press', 4, 10, 30, ''],\n      ['TOTAL SETS','','=SUM(C3:C7)','=SUM(D3:D7)','',''],\n    ]},\n    { name: 'Summary', headers: ['Metric','Value'], rows: [\n      ['Total sets', \"='Workout Log'!C8\"],\n      ['Total reps', \"='Workout Log'!D8\"],\n      ['Total volume (kg)', \"=SUMPRODUCT('Workout Log'!C3:C7,'Workout Log'!D3:D7,'Workout Log'!E3:E7)\"],\n    ]},\n  ]},\n  onboarding: { sheets: [\n    { name: 'Onboarding Tracker', headers: ['Client','Stage','Start Date','Documents','Next Step','Status'], rows: [\n      ['Ayesha Khan','Discovery call','2026-11-10','Brief received','Send proposal','In progress'],\n      ['Bilal Ahmed','Proposal sent','2026-11-08','NDA signed','Follow up','Waiting'],\n      ['Sara Ali','Contract signed','2026-11-05','Contract + invoice','Kickoff call','Ready'],\n      ['TOTAL CLIENTS','=COUNTA(A3:A5)','','','',''],\n    ]},\n    { name: 'Checklist', headers: ['Step','Done'], rows: [\n      ['Discovery call','Yes'],\n      ['Proposal sent','Yes'],\n      ['Contract signed','No'],\n      ['Payment received','No'],\n      ['Kickoff scheduled','No'],\n    ]},\n  ]},\n};\nconst bank = BANKS[kind];\nif (!bank) throw new Error('Unknown tracker kind: ' + kind);\nconst payload = { title: v.payload.title, sheets: bank.sheets };\nreturn [{ json: { ...v, payload, retries: 0 } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "build-bank",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/spreadsheets",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 300000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "name": "call-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "check-demand",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-demand": {
+      "main": [
+        [
+          {
+            "node": "match-demand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "match-demand": {
+      "main": [
+        [
+          {
+            "node": "if-demand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-demand": {
+      "main": [
+        [
+          {
+            "node": "has-sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-needs-validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-needs-validation": {
+      "main": [
+        [
+          {
+            "node": "respond-needs-validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-api": {
+      "main": [
+        [
+          {
+            "node": "normalize-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-result": {
+      "main": [
+        [
+          {
+            "node": "check-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-ok": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "is-retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is-retryable": {
+      "main": [
+        [
+          {
+            "node": "wait-retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait-retry": {
+      "main": [
+        [
+          {
+            "node": "bump-retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "bump-retry": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "has-sheets": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "build-bank",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-bank": {
+      "main": [
+        [
+          {
+            "node": "call-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "errorWorkflow": "digital-error-recovery"
+}

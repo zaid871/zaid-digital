@@ -1,0 +1,133 @@
+{
+  "name": "digital-beat-the-top",
+  "pinData": {},
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 3 * * 0"
+            }
+          ]
+        }
+      },
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/beat/collect",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {} }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      },
+      "name": "collect",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/beat/analyze",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { benchmarks: $json.data.benchmarks } }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      },
+      "name": "analyze",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nconst gaps = d.gaps ?? [];\nconst lines = [`Beat-the-top ${d.generatedAt ?? ''} — ${d.targetsChecked ?? 0} targets, ${d.beating ?? 0} beating`];\nfor (const g of gaps) {\n  lines.push(`[${g.status.toUpperCase()}${g.status === 'unknown' ? '' : ` ${g.gapPct}%`}] ${g.field}/${g.platform} (${g.niche}) ${g.metric}: us ${g.ourValue ?? '?'} vs #1 ${g.theirValue}`);\n  lines.push(`    evidence: ${g.evidence}`);\n  for (const a of (g.actions ?? [])) lines.push(`    action: ${a}`);\n}\nlines.push(`Warnings: ${(d.warnings ?? []).join('; ')}`);\nreturn [{ json: { report: lines.join('\\n') } }];"
+      },
+      "name": "report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "collect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "collect": {
+      "main": [
+        [
+          {
+            "node": "analyze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "analyze": {
+      "main": [
+        [
+          {
+            "node": "report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "errorWorkflow": "digital-error-recovery"
+}

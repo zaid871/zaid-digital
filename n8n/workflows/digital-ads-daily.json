@@ -1,0 +1,209 @@
+{
+  "name": "digital: ads-daily",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "schedule-trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Roz 09:00 IST (03:30 UTC).",
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 3 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pick-today",
+      "name": "pick-today",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        300
+      ],
+      "notes": "DIGITAL_ADS_QUEUE_JSON me se aaj ka product rotate karke uthao.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Roz ka ads run — pehle brain ka plan dekho (dailyAd), na mile to\n// DIGITAL_ADS_QUEUE_JSON se rotate karo (day-of-year % queue length).\n// Brain down ho ya plan na ho to queue fallback kabhi block nahi karta.\nconst planJson = $('get-plan').first().json;\nconst plan = (planJson && planJson.data && planJson.data.plan) || (planJson && planJson.plan) || null;\nconst publish = String($env.DIGITAL_ADS_AUTO_PUBLISH || 'false').toLowerCase() === 'true';\nconst ad = plan && plan.dailyAd ? plan.dailyAd : null;\nif (ad && ad.productType && ad.productName && ad.productLink) {\n  const payload = { productType: ad.productType, productName: ad.productName, productLink: ad.productLink, publish };\n  if (ad.productDescription) payload.productDescription = ad.productDescription;\n  return [{ json: { ok: true, payload, source: 'brain', score: plan.slots && plan.slots[0] ? plan.slots[0].score : null } }];\n}\nconst raw = $env.DIGITAL_ADS_QUEUE_JSON || '[]';\nlet queue = [];\ntry { queue = JSON.parse(raw); } catch (e) { queue = []; }\nif (!Array.isArray(queue) || !queue.length) {\n  return [{ json: { ok: false,\n    reason: 'Brain plan me dailyAd nahi aur DIGITAL_ADS_QUEUE_JSON khaali hai — products ki list env me set karo.' } }];\n}\nconst dayIdx = Math.floor(Date.now() / 86400000);\nconst item = queue[dayIdx % queue.length] || {};\nconst payload = { productType: item.productType, productName: item.productName,\n  productLink: item.productLink, publish };\nif (item.topic) payload.topic = item.topic;\nif (item.niche) payload.niche = item.niche;\nif (!payload.productType || !payload.productName || !payload.productLink) {\n  return [{ json: { ok: false, reason: 'Queue item me productType/productName/productLink zaroori hai.' } }];\n}\nreturn [{ json: { ok: true, payload, source: 'queue', queueSize: queue.length, dayIndex: dayIdx % queue.length } }];\n"
+      }
+    },
+    {
+      "id": "if-ready",
+      "name": "if-ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        600,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fire-ads",
+      "name": "fire-ads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        240
+      ],
+      "notes": "Fire-and-forget: ads workflow ~40 min chalti hai, jawab ka wait nahi.",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.N8N_PUBLIC_URL || 'http://localhost:5678') }}/webhook/digital-ads-marketing",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "log-done",
+      "name": "log-done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconsole.log(JSON.stringify({ event: 'digital_ads_daily', ok: j.ok,\n  product: j.payload?.productName ?? null, reason: j.reason ?? null,\n  at: new Date().toISOString() }));\nreturn [{ json: j }];\n"
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/brain/latest",
+        "options": {
+          "timeout": 15000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "fd1a135f-183d-4635-8b57-0f7f7cdc9787",
+      "name": "get-plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "schedule-trigger": {
+      "main": [
+        [
+          {
+            "node": "get-plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-plan": {
+      "main": [
+        [
+          {
+            "node": "pick-today",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pick-today": {
+      "main": [
+        [
+          {
+            "node": "if-ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-ready": {
+      "main": [
+        [
+          {
+            "node": "fire-ads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "log-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fire-ads": {
+      "main": [
+        [
+          {
+            "node": "log-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Lever 3 (roz ka ads run): roz 09:00 IST par DIGITAL_ADS_QUEUE_JSON me se product rotate karke digital-ads-marketing fire karta hai. DIGITAL_ADS_AUTO_PUBLISH=true par hi auto-post hoga.",
+  "errorWorkflow": "digital-error-recovery"
+}

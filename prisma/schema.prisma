@@ -1,0 +1,496 @@
+// Prisma schema for the AI Product-to-Video Automation Platform.
+// Database: PostgreSQL. Run `npm run db:migrate` after configuring DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  projects  Project[]
+  auditEvents AuditEvent[]
+}
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs      Job[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Job {
+  id              String   @id @default(cuid())
+  projectId       String?
+  project         Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  productId       String?
+  product         Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productUrl      String
+  normalizedUrl   String?
+  status          String   @default("QUEUED")
+  durationSeconds Int      @default(45)
+  language        String   @default("hinglish")
+  voice           String?
+  visualStyle     String?
+  scriptStyle     String?
+  platform        String?
+  /** Opt-in GIF preview (job created with gif:true or hub prompt "gif banao"). Default false. */
+  gifRequested    Boolean  @default(false)
+  /** Opt-in storyboard chain: 5 ad concepts → best → 9-scene storyboard (Raj, 2026-11-10). Default false. */
+  storyboardChain Boolean  @default(false)
+  idempotencyKey  String?  @unique
+  errorCode       String?
+  errorMessage    String?
+  maxCostUsd      Decimal? @db.Decimal(10, 4)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  stages          JobStage[]
+  events          JobEvent[]
+  research        ProductResearch?
+  evidence        Evidence[]
+  identity        ProductIdentity?
+  creativePlan    CreativePlan?
+  script          Script?
+  storyboard      Storyboard?
+  sceneAssets     SceneAsset[]
+  mediaAssets     MediaAsset[]
+  complianceReports ComplianceReport[]
+  qualityReports  QualityReport[]
+  finalVideo      FinalVideo?
+  costRecords     CostRecord[]
+  retries         RetryRecord[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model JobStage {
+  id          String    @id @default(cuid())
+  jobId       String
+  job         Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  stageKey    String
+  order       Int
+  status      String    @default("pending") // pending | running | succeeded | failed | skipped | waiting_review
+  progressPct Int       @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  message     String?
+  warnings    String[]  @default([])
+  retryCount  Int       @default(0)
+
+  @@unique([jobId, stageKey])
+  @@index([jobId])
+}
+
+model JobEvent {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type      String
+  message   String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+model ProductResearch {
+  id             String   @id @default(cuid())
+  jobId          String   @unique
+  job            Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion  String   @default("1.0.0")
+  productName    String?
+  brand          String?
+  model          String?
+  category       String?
+  description    String?
+  specifications Json?
+  features       String[] @default([])
+  intendedUse    String?
+  compatibility  String[] @default([])
+  packageContents String[] @default([])
+  warranty       String?
+  sourceUrls     String[] @default([])
+  extractedAt    DateTime?
+  createdAt      DateTime @default(now())
+}
+
+model Evidence {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  claim         String
+  status        String   // verified | unverified | ai_inference
+  sourceUrl     String?
+  sourceTitle   String?
+  publishedAt   DateTime?
+  retrievedAt   DateTime @default(now())
+  excerpt       String?
+
+  @@index([jobId, status])
+}
+
+model ProductIdentity {
+  id              String   @id @default(cuid())
+  jobId           String   @unique
+  job             Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion   String   @default("1.0.0")
+  canonicalName   String
+  brand           String?
+  model           String?
+  category        String?
+  appearance      Json?
+  verifiedFeatures String[] @default([])
+  knownUncertainty String[] @default([])
+  referenceAssetIds String[] @default([])
+  visualConsistencyNotes String?
+  createdAt       DateTime @default(now())
+}
+
+model CreativePlan {
+  id               String   @id @default(cuid())
+  jobId            String   @unique
+  job              Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion    String   @default("1.0.0")
+  targetAudience   String?
+  objective        String?
+  hook             String?
+  sellingPoints    String[] @default([])
+  narrativeStructure String?
+  sceneOrder       String[] @default([])
+  visualApproach   String?
+  callToAction     String?
+  claimsToAvoid    String[] @default([])
+  createdAt        DateTime @default(now())
+}
+
+model Script {
+  id                    String   @id @default(cuid())
+  jobId                 String   @unique
+  job                   Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion         String   @default("1.0.0")
+  language              String   @default("hinglish")
+  scenes                Json
+  totalEstimatedSeconds Float?
+  callToAction          String?
+  createdAt             DateTime @default(now())
+}
+
+model Storyboard {
+  id                  String   @id @default(cuid())
+  jobId               String   @unique
+  job                 Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion       String   @default("1.0.0")
+  scenes              Json
+  totalDurationSeconds Float?
+  createdAt           DateTime @default(now())
+}
+
+model SceneAsset {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sceneId       String
+  assetType     String   // image | video | audio | caption
+  storageKey    String
+  provider      String?
+  model         String?
+  prompt        String?
+  generatedAt   DateTime @default(now())
+  costUsd       Decimal? @db.Decimal(10, 4)
+  contentHash   String?
+
+  @@index([jobId, sceneId])
+}
+
+model MediaAsset {
+  id             String   @id @default(cuid())
+  jobId          String
+  job            Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sourceUrl      String?
+  assetType      String
+  rightsStatus   String   @default("unknown") // licensed | authorized | unknown | ai_generated
+  retrievedAt    DateTime @default(now())
+  attribution    String?
+  permittedUses  String[] @default([])
+  contentHash    String?
+  storageKey     String?
+
+  @@index([jobId])
+}
+
+model ProviderConfig {
+  id            String    @id @default(cuid())
+  providerKey   String    @unique
+  displayName   String
+  capabilities  String[]  @default([])
+  configured    Boolean   @default(false)
+  lastHealthCheck DateTime?
+  lastHealthStatus String?
+  isPrimary     Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  // Credentials live in env / n8n credential store — never in this table.
+}
+
+model ProviderUsage {
+  id          String   @id @default(cuid())
+  providerKey String
+  jobId       String?
+  capability  String
+  units       Float?
+  unitLabel   String?
+  costUsd     Decimal? @db.Decimal(10, 4)
+  model       String?
+  recordedAt  DateTime @default(now())
+
+  @@index([providerKey, recordedAt])
+  @@index([jobId])
+}
+
+model CostRecord {
+  id          String   @id @default(cuid())
+  jobId       String
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  kind        String   // estimate | actual
+  stageKey    String?
+  amountUsd   Decimal  @db.Decimal(10, 4)
+  note        String?
+  recordedAt  DateTime @default(now())
+
+  @@index([jobId])
+}
+
+model ComplianceReport {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion String   @default("1.0.0")
+  verdict       String   // APPROVED | NEEDS_REVIEW | REJECTED
+  productCategory String?
+  checks        Json
+  reviewReasons String[] @default([])
+  phase         String   @default("pre_script") // pre_script | pre_delivery
+  assessedAt    DateTime @default(now())
+
+  @@index([jobId, phase])
+}
+
+model QualityReport {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion String   @default("1.0.0")
+  verdict       String   // PASS | PASS_WITH_WARNINGS | NEEDS_REVIEW | FAILED
+  technicalChecks Json
+  contentChecks Json
+  warnings      String[] @default([])
+  actualSpecs   Json?
+  assessedAt    DateTime @default(now())
+
+  @@index([jobId])
+}
+
+model FinalVideo {
+  id               String   @id @default(cuid())
+  jobId            String   @unique
+  job              Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion    String   @default("1.0.0")
+  storageKey       String
+  captionSrtKey    String?
+  captionVttKey    String?
+  /** Storage key of the opt-in GIF preview (job.gifRequested only). Null otherwise. */
+  gifKey           String?
+  width            Int?
+  height           Int?
+  fps              Float?
+  durationSeconds  Float?
+  renderedAt       DateTime @default(now())
+}
+
+model RetryRecord {
+  id          String   @id @default(cuid())
+  jobId       String
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  stageKey    String
+  attempt     Int
+  reason      String?
+  retryable   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([jobId, stageKey])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ── Autonomous affiliate system (§19) ──────────────────────────────────────
+// Business lifecycle: DISCOVERED → VERIFIED → SCRIPTED → ASSETS_READY →
+// RENDERED → QC_APPROVED → LISTED → PUBLISHED → ANALYZED
+// plus FAILED | REJECTED | NEEDS_REVIEW. Stored as String (repo convention).
+
+model Product {
+  id            String   @id @default(cuid())
+  canonicalName String
+  brand         String?
+  category      String?
+  description   String?
+  sourceUrls    String[] @default([])
+  imageUrls     String[] @default([])
+  dedupHash     String   @unique // sha256 of normalized name+brand
+  businessState String   @default("DISCOVERED")
+  stateReason   String?
+  discoveredAt  DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  affiliateLinks AffiliateLink[]
+  facts          ProductFact[]
+  jobs           Job[]
+  listings       PublishRecord[]
+  experiments    ExperimentRecord[]
+
+  @@index([businessState])
+  @@index([category])
+}
+
+model ProductFact {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  claim       String
+  status      String   // verified | unverified | rejected
+  sourceUrl   String?
+  sourceTitle String?
+  excerpt     String?
+  createdAt   DateTime @default(now())
+
+  @@index([productId, status])
+}
+
+model AffiliateLink {
+  id               String    @id @default(cuid())
+  productId        String
+  product          Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  program          String    // amazon_associates | flipkart | admitad | impact | vcommission | other
+  url              String
+  disclosure       String    @default("Affiliate link — I may earn a commission at no extra cost to you.")
+  validationStatus String    @default("unchecked") // unchecked | valid | broken | redirected
+  lastCheckedAt    DateTime?
+  httpStatus       Int?
+  finalUrl         String?
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([productId, isActive])
+}
+
+model PublishRecord {
+  id              String    @id @default(cuid())
+  productId       String?
+  product         Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  jobId           String?
+  platform        String    // instagram_reels | facebook_reels | website
+  status          String    @default("pending") // pending | uploading | processing | published | failed | skipped | building | ready | needs_review
+  platformMediaId String?
+  caption         String?
+  permalink       String?
+  retryCount      Int       @default(0)
+  errorMessage    String?
+  publishedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  analytics       AnalyticsRecord[]
+  videoUrl        String?   // source video URL, needed for repost variants
+  variantOf       String?   // set on repost variants -> original PublishRecord id
+  original        PublishRecord?  @relation("RepostVariant", fields: [variantOf], references: [id], onDelete: SetNull)
+  variants        PublishRecord[] @relation("RepostVariant")
+
+  @@unique([platform, platformMediaId])
+  @@index([platform, status])
+  @@index([productId])
+}
+
+model AnalyticsRecord {
+  id              String        @id @default(cuid())
+  publishRecordId String
+  publishRecord   PublishRecord @relation(fields: [publishRecordId], references: [id], onDelete: Cascade)
+  views           Int?
+  reach           Int?
+  engagement      Int?
+  likes           Int?
+  comments        Int?
+  linkClicks      Int?
+  conversions     Int?
+  revenueUsd      Decimal?      @db.Decimal(10, 4)
+  collectedAt     DateTime      @default(now())
+
+  @@index([publishRecordId, collectedAt])
+}
+
+model ExperimentRecord {
+  id         String   @id @default(cuid())
+  productId  String?
+  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  name       String
+  hypothesis String?
+  variant    String?  // e.g. hook_a | hook_b
+  metrics    Json?
+  conclusion String?  // learning; never presented as proven unless verified
+  status     String   @default("running") // running | concluded | discarded
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status])
+}
+
+model WorkflowRun {
+  id             String    @id @default(cuid())
+  workflowKey    String    // one of the 16 §18 workflows, e.g. product-discovery
+  n8nExecutionId String?
+  status         String    @default("started") // started | succeeded | failed | waiting
+  productId      String?
+  jobId          String?
+  detail         Json?
+  errorMessage   String?
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+
+  @@index([workflowKey, startedAt])
+  @@index([status])
+}
+
+model QuotaRecord {
+  id          String   @id @default(cuid())
+  providerKey String
+  capability  String   // text | image | tts | video
+  windowStart DateTime
+  usedUnits   Float    @default(0)
+  limitUnits  Float?
+  exhausted   Boolean  @default(false)
+  checkedAt   DateTime @default(now())
+
+  @@index([providerKey, capability, windowStart])
+}

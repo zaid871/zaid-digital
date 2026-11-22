@@ -1,0 +1,320 @@
+{
+  "name": "digital-products",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-products"
+      },
+      "id": "cd9cadc5-99c8-43c2-8c56-6341059fe78e",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst type = String(body.type ?? '');\nif (!['ebook', 'template_pack'].includes(type)) {\n  return [{ json: { valid: false, error: 'type must be \"ebook\" or \"template_pack\"' } }];\n}\nif (type === 'ebook' && String(body.topic ?? '').trim().length < 3) {\n  return [{ json: { valid: false, error: 'ebook ke liye topic (kam se kam 3 characters) zaroori hai' } }];\n}\nif (type === 'template_pack' && String(body.niche ?? '').trim().length < 2) {\n  return [{ json: { valid: false, error: 'template_pack ke liye niche zaroori hai' } }];\n}\nconst payload = { ...body };\ndelete payload.type;\nreturn [{ json: { valid: true, type, payload } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "3a40e062-f242-4279-8e8b-bf325c6b444d",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "febadbbc-a9ef-4d67-a703-a06cdf7abd3c",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "0e837610-615e-4051-af40-9a4ab519595c",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        660,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.type === 'ebook' }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "9d5147bf-24d9-4794-a957-5839f91b3f43",
+      "name": "route-type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/ebooks",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 900000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "d16942e2-5eaf-4902-902d-be22d98b6d76",
+      "name": "call-ebook-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/digital/template-packs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 300000
+        },
+        "onError": "continueRegularOutput"
+      },
+      "id": "77a54643-1281-428b-8e97-05482dafcd48",
+      "name": "call-templates-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nlet type = 'unknown';\ntry { type = $('validate-input').first().json.type ?? 'unknown'; } catch {}\nif (r && r.ok === true && r.data) {\n  const d = r.data;\n  return [{ json: { ok: true, type, title: d.title ?? d.packName ?? '', dir: d.dir ?? '', files: d.files ?? {}, warnings: d.warnings ?? [] } }];\n}\nreturn [{ json: { ok: false, type, error: (r && (r.message ?? r.error)) || 'Digital product generation failed', code: (r && r.code) || 'generation_failed' } }];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "5a6b7fcb-2e7f-4aa3-b6c3-079d275575a4",
+      "name": "normalize-result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "54c30a7c-b9b1-4a6d-a153-34bf6e37c96b",
+      "name": "check-ok",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "d333185b-0322-4ff5-afb9-11e8a0a7f627",
+      "name": "respond-success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 502
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "132375fb-0a1c-48a0-aff7-568d756af7c8",
+      "name": "respond-failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "route-type",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "route-type": {
+      "main": [
+        [
+          {
+            "node": "call-ebook-api",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "call-templates-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-ebook-api": {
+      "main": [
+        [
+          {
+            "node": "normalize-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-templates-api": {
+      "main": [
+        [
+          {
+            "node": "normalize-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalize-result": {
+      "main": [
+        [
+          {
+            "node": "check-ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-ok": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "errorWorkflow": "digital-error-recovery"
+}

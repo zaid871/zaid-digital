@@ -1,0 +1,530 @@
+{
+  "name": "digital: marketing-machine",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "webhook-entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "Machine in: brief → strategist → gate → 4 channels → report.",
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {
+          "responseMode": "responseNode"
+        },
+        "path": "digital-marketing-machine"
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "validate-input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers ?? {};\nconst provided = String(headers['x-n8n-secret'] ?? headers['X-N8N-Secret'] ?? '');\nconst expected = String($env.N8N_WEBHOOK_SECRET ?? '');\nif (!expected) throw new Error('N8N_WEBHOOK_SECRET is not configured in n8n');\nif (provided.length !== expected.length) throw new Error('Unauthorized: bad webhook secret');\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);\nif (diff !== 0) throw new Error('Unauthorized: bad webhook secret');\nconst body = item.body ?? item;\nconst kinds = ['digital_product', 'physical', 'affiliate', 'service'];\nconst bands = ['low', 'mid', 'high'];\nconst breadths = ['broad', 'niche', 'micro'];\nconst goals = ['sales', 'leads'];\nconst errs = [];\nif (!body.productName || String(body.productName).length < 2) errs.push('productName zaroori hai');\nif (!kinds.includes(body.kind)) errs.push('kind: ' + kinds.join('|'));\nif (!bands.includes(body.priceBand)) errs.push('priceBand: ' + bands.join('|'));\nif (!breadths.includes(body.marketBreadth)) errs.push('marketBreadth: ' + breadths.join('|'));\nif (!goals.includes(body.goal)) errs.push('goal: ' + goals.join('|'));\nif (!body.audience || String(body.audience).length < 2) errs.push('audience zaroori hai');\nif (errs.length) return [{ json: { valid: false, error: errs.join('; ') } }];\nreturn [{ json: { valid: true, brief: {\n  productName: String(body.productName), client: body.client ?? undefined,\n  kind: body.kind, priceBand: body.priceBand, audience: String(body.audience),\n  marketBreadth: body.marketBreadth, goal: body.goal,\n  assets: body.assets ?? {}, features: body.features ?? [],\n  productLink: body.productLink ?? undefined, imageUrl: body.imageUrl ?? undefined,\n  seoKeywords: body.seoKeywords ?? undefined,\n  presell: body.presell ?? undefined,\n} } }];\n"
+      }
+    },
+    {
+      "id": "if-valid",
+      "name": "if-valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-invalid",
+      "name": "respond-invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        460
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 400
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "strategist-plan",
+      "name": "strategist-plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketing/strategist/plan",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.brief }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "build-presell-body",
+      "name": "build-presell-body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ],
+      "notes": "Gate sirf ebook/template/pod presell par lagta hai.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const b = $('validate-input').first().json.brief;\nconst p = b.presell;\nif (p && ['ebook', 'template_pack', 'pod'].includes(p.productType) && p.productName)\n  return [{ json: { skip: false, action: 'status', productType: p.productType, productName: p.productName } }];\nreturn [{ json: { skip: true } }];\n"
+      }
+    },
+    {
+      "id": "if-needs-gate",
+      "name": "if-needs-gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "presell-check",
+      "name": "presell-check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_PUBLIC_URL }}/webhook/digital-presell",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "gate-eval",
+      "name": "gate-eval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = r.data ?? r;\nif (r.error || d.error) return [{ json: { gate: 'unknown', note: 'presell check failed — proceeding with warning' } }];\nif (typeof d.validated === 'boolean')\n  return [{ json: { gate: d.validated ? 'passed' : 'not-passed',\n    note: `presell ${d.hits}/${d.threshold} hits${d.validated ? '' : ' — validation pending, channels run anyway (all free)'}` } }];\nreturn [{ json: { gate: 'unknown', note: 'presell response unreadable — proceeding with warning' } }];\n"
+      }
+    },
+    {
+      "id": "build-actions",
+      "name": "build-actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        300
+      ],
+      "notes": "Per-channel payloads + runnable flags.",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const brief = $('validate-input').first().json.brief;\nconst planR = $('strategist-plan').first().json;\nconst plan = planR.data ?? planR;\nconst gate = $('gate-eval').first().json;\nconst feats = brief.features ?? [];\nreturn [{ json: {\n  brief, productKey: plan.productKey ?? brief.productName,\n  channelQueue: plan.channelQueue ?? [],\n  gate,\n  pinterest: {\n    runnable: !!(brief.productLink && brief.imageUrl),\n    payload: { product: { name: brief.productName, category: brief.kind,\n      link: brief.productLink ?? 'https://example.com', imageUrl: brief.imageUrl ?? 'https://example.com/i.jpg',\n      features: feats }, count: 5 },\n  },\n  etsy: { payload: { title: brief.productName, niche: brief.audience, features: feats } },\n  seo: { payload: { topic: brief.productName, keywords: brief.seoKeywords ?? [brief.productName],\n    audience: brief.audience, productName: brief.productName, productLink: brief.productLink ?? undefined } },\n} }];\n"
+      }
+    },
+    {
+      "id": "if-pinterest",
+      "name": "if-pinterest",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        300
+      ],
+      "parameters": {
+        "combineOperation": "all",
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.pinterest.runnable }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ch-pinterest",
+      "name": "ch-pinterest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/publishing/pinterest-volume",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('build-actions').first().json.pinterest.payload }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "ch-etsy",
+      "name": "ch-etsy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/marketplace/etsy-optimize",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('build-actions').first().json.etsy.payload }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "ch-seo",
+      "name": "ch-seo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/v1/seo/articles",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('build-actions').first().json.seo.payload }}",
+        "options": {
+          "timeout": 300000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-n8n-secret",
+              "value": "={{ $env.N8N_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "collect-report",
+      "name": "collect-report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const a = $('build-actions').first().json;\nconst pin = $('ch-pinterest').first().json; const pinD = pin.data ?? pin;\nconst etsy = $('ch-etsy').first().json; const etsyD = etsy.data ?? etsy;\nconst seo = $('ch-seo').first().json; const seoD = seo.data ?? seo;\nconst lines = [`MARKETING MACHINE: ${a.productKey}`,\n  `Gate: ${a.gate.gate} — ${a.gate.note}`,\n  `Channel queue: ${(a.channelQueue ?? []).join(' → ')}`,\n  `Pinterest: ${pinD.published ?? 0}/${pinD.total ?? 0} pins published`,\n  `Etsy: ${etsyD.title ? 'optimized' : 'failed'}${etsyD.bundleSuggestion ? ' | bundle: ' + etsyD.bundleSuggestion : ''}`,\n  `SEO article: ${seoD.title ? '\"' + seoD.title + '\"' : 'failed'} (slug: ${seoD.slug ?? '-'})`,\n  `Video ads: ads-daily queue me product add karo (DIGITAL_ADS_QUEUE_JSON)`,\n  `Scoreboard: goal-loop weekly sweep (auto-fallback built-in)`];\nconsole.log(lines.join('\\n'));\nreturn [{ json: { ok: true, productKey: a.productKey, report: lines.join('\\n'),\n  pinterest: pinD, etsy: etsyD, seo: { title: seoD.title, slug: seoD.slug } } }];\n"
+      }
+    },
+    {
+      "id": "respond-done",
+      "name": "respond-done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [
+        [
+          {
+            "node": "validate-input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-input": {
+      "main": [
+        [
+          {
+            "node": "if-valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-valid": {
+      "main": [
+        [
+          {
+            "node": "strategist-plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond-invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "strategist-plan": {
+      "main": [
+        [
+          {
+            "node": "build-presell-body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-presell-body": {
+      "main": [
+        [
+          {
+            "node": "if-needs-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-needs-gate": {
+      "main": [
+        [
+          {
+            "node": "build-actions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "presell-check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "presell-check": {
+      "main": [
+        [
+          {
+            "node": "gate-eval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gate-eval": {
+      "main": [
+        [
+          {
+            "node": "build-actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "build-actions": {
+      "main": [
+        [
+          {
+            "node": "if-pinterest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if-pinterest": {
+      "main": [
+        [
+          {
+            "node": "ch-pinterest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ch-etsy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ch-pinterest": {
+      "main": [
+        [
+          {
+            "node": "ch-etsy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ch-etsy": {
+      "main": [
+        [
+          {
+            "node": "ch-seo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ch-seo": {
+      "main": [
+        [
+          {
+            "node": "collect-report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "collect-report": {
+      "main": [
+        [
+          {
+            "node": "respond-done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "affiliate-system"
+    }
+  ],
+  "notes": "Marketing Machine orchestrator: brief → strategist → gate → 4 channels.",
+  "errorWorkflow": "digital-error-recovery"
+}
