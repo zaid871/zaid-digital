@@ -16,8 +16,10 @@
  *   4. Forwarding happens in ctx.waitUntil so Meta gets its 200
  *      immediately; the VM webhook URL answers the actual event.
  *
- * Deploy (needs a VALID CLOUDFLARE_API_TOKEN — the one in the keys
- * file failed verification, so deploy is blocked until it is re-sent):
+ * Deployed 2026-11-22 (wrangler 4.86.0, node:20-slim container on the
+ * VM) → https://toolbox-webhook-ingress.sahz7890.workers.dev; secrets
+ * META_APP_SECRET + META_VERIFY_TOKEN set via the Cloudflare API;
+ * Meta subscription ACTIVE (instagram, comments). Redeploy:
  *   cd src/lib/tools/workers/webhook-ingress
  *   wrangler secret put META_APP_SECRET
  *   wrangler secret put META_VERIFY_TOKEN

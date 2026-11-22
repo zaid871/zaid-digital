@@ -514,3 +514,67 @@ even when wired. Map key is now `s3-storage`, and `r2Adapter` reports
   `/api/v1/tools/registry` returns 404. The next redeploy carries the
   registry, dispatch, adapters, render-bundle route and all 6 task
   paths at once.
+
+## Free-setup progress 2026-11-22 (user: "jo free hain un ka setup tum khud kr do")
+
+Modal is NOT in this list — its $30 credit needs a card on file, so it
+stays user-only. What was done without the user:
+
+- **Cloudflare Workers (public route):** the VM's port 5678 is NOT
+  publicly reachable (curl from outside → 000; Oracle firewall), so the
+  Worker cannot call n8n directly. Added a path-scoped route to
+  `docker/Caddyfile`: `handle /webhook/* → reverse_proxy
+  10.0.0.196:5678` (webhooks only — editor/API stay private), synced to
+  the VM, Caddy reloaded (exit 0), verified from outside: GET/POST
+  `/webhook/affiliate/ig-comments` → 404 in ~0.4 s, which is n8n
+  answering "workflow inactive" — the route works; the auto-DM workflow
+  is held, so 404 is the correct answer until it is activated.
+  `wrangler.toml` VM_WEBHOOK_URL is now
+  `http://158.180.19.153/webhook/affiliate/ig-comments` (the workflow's
+  real webhook path — `affiliate/ig-comments`, not `affiliate/instagram`).
+- **CLIs in the image:** the adapters shell out from the app container,
+  so `docker/Dockerfile.app` now installs `kaggle` + `modal` (pip,
+  pure-Python — unlike rembg's numba, they have musllinux wheels) and
+  `wrangler` (npm global). Auth stays env-only at runtime. Build
+  verification happens at the next redeploy (no Docker in the sandbox).
+- **GitHub repo prep:** `git init` (branch main) + first commit
+  `ef7a24b` (576 files). `.gitignore` gained `/storage/` (277M runtime
+  state) with `storage/tool-registry.json` force-added as config; secret
+  scan before commit found no keys in the tree and `.env` is NOT in the
+  commit. Commit author set to Syed Zaid / preaitools@gmail.com (the
+  n8n account email — correct it with `git config user.email` if the
+  GitHub email differs).
+
+Still needs the user (account-only, cannot be done for them):
+- Kaggle: create account → verify phone once (GPU gate) → Settings →
+  API → Create New Token → send the `kaggle.json` file (file method).
+  Training images: a folder of 20–100 same-style product shots.
+- GitHub: create an empty PUBLIC repo (name of their choice) → create a
+  classic PAT with `repo` + `workflow` scopes → send the PAT by file +
+  the repo name (`owner/repo`). Then: push, repo secrets
+  (N8N_WEBHOOK_SECRET + API_BASE), VM .env install, live dispatch test.
+- Cloudflare token: DONE 2026-11-22 — the file's 53-char value WAS the
+  genuine token (new 2026 scannable format: `cfat_` + 40 chars +
+  8-char checksum; the old 'exactly 40 chars' rule was pre-2026).
+  Installed blind into VM `.env` (format-checked) and verified live:
+  `/accounts` → 200, exactly the expected account; the earlier 401s
+  were the token's IP condition (only 122.183.36.212), which the user
+  has now removed/fixed. App+worker restarted, health ok:true.
+  R2 is now WIRED 2026-11-22 — the user enabled R2 in the dashboard;
+  the bucket `n8n` already existed in the account (create returned 409
+  'already exists, and you own it'; list → 200, exactly one bucket,
+  `n8n`). S3_BUCKET=n8n installed in VM `.env`, app+worker restarted
+  (health ok:true), live test from the app container: PutObject +
+  GetObject (content matched) + DeleteObject all ok. Registry r2 →
+  wired (lastVerified 2026-11-22). Meta App Secret: DONE 2026-11-22 — installed blind (32-hex,
+  format-checked, from the file's 'meta app secret key' line) + verified live via Graph API (app access
+  token → 200, "Zaid Digital"). Webhook-ingress Worker DEPLOYED + SUBSCRIBED 2026-11-22: wrangler 4.86.0
+  via a node:20-slim container on the VM (wrangler is not in the VM's app image yet — it arrives with
+  the redeploy) → https://toolbox-webhook-ingress.sahz7890.workers.dev; secrets META_APP_SECRET +
+  META_VERIFY_TOKEN set via the Cloudflare API (201); Meta subscription ACTIVE (object instagram, fields
+  comments, callback = worker /webhook); worker tests all pass (valid POST 200 OK, bad signature 401,
+  wrong verify token 403, non-IG object 200 Ignored). NOTE: the first test calls were blocked by
+  Cloudflare error 1010 (Python-urllib User-Agent) — a browser User-Agent passes; Meta's own requests
+  were never affected (its verification GET succeeded during subscribe). Registry cf-workers → wired.
+  Real comment events now flow to the worker and are forwarded to n8n — n8n 404s them until the auto-DM
+  workflow is activated (needs the IG Tester invites + user's go-ahead), so no DMs are sent yet.
