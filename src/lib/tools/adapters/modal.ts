@@ -2,7 +2,7 @@
  * Modal GPU adapter — $30/mo credit (~50 h T4 / ~14 h A100-40GB).
  *
  * Modal is Python-first: the adapter shells out to the `modal` CLI
- * (`modal run <worker>::<fn> --payload_json '<json>'`). Every worker
+ * (`modal run <worker>::<fn> --payload-json '<json>'`). Every worker
  * function takes exactly one kwarg, payload_json, and prints one
  * `RESULT_JSON:{...}` line at the end — the adapter parses that line
  * and ignores the rest of the CLI output.
@@ -96,7 +96,7 @@ export const modalAdapter: ToolAdapter = {
     let out: { stdout: string; stderr: string };
     try {
       out = await runCli(
-        ["run", `${workerPath}::${target.fn}`, "--payload_json", JSON.stringify(parsed.data.args)],
+        ["run", `${workerPath}::${target.fn}`, "--payload-json", JSON.stringify(parsed.data.args)],
         Math.min(req.timeoutMs, 3_600_000)
       );
     } catch (err) {

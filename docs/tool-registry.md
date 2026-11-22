@@ -162,7 +162,7 @@ Candidates — verified, not wired:
 | GitHub Actions (public repo) | parallel-compute | 4 vCPU + 16 GB per runner, 20 concurrent, job max 6 h; CI/CD only — no persistent hosting, no limit-bypass (ToS) | candidate |
 | Cloudflare Workers | webhook-ingress | 100k req/day, 10 ms CPU, 128 MB per request — routing only, no heavy work | candidate |
 | Kaggle (manual/batch) | lora-train, gpu-batch | 30 GPU h/week, 1x P100 or 2x T4 (16 GB VRAM), 29 GB RAM, session max 12 h, 20 GB saved disk, no inbound webhook | candidate |
-| Modal ($30/mo free credit) | gpu-video, lora-train, gpu-batch | ~50 h T4 / ~14 h A100 40 GB per $30 credit; recurring monthly | candidate |
+| Modal ($30/mo free credit) | gpu-video, lora-train, gpu-batch | ~50 h T4 / ~14 h A100 40 GB per $30 credit; recurring monthly | **wired 2026-11-22** |
 | NVIDIA NIM | text-llm | 40 RPM, 10,000 req/day per model, 100+ models; no card | candidate (priority add 1) |
 | Cloudflare R2 | object-storage | 10 GB free, $0 egress | candidate (priority add 2) |
 | Pingzen | monitoring | 55 monitors, 1-min checks, commercial use allowed | candidate (priority add 3) |
@@ -480,7 +480,7 @@ next redeploy; NOT live-tested — every new adapter needs its account/key
 | # | Task | Built 2026-11-22 | Still blocked by |
 |---|---|---|---|
 | 1 | Parallel renders | `GET /api/v1/jobs/[id]/render-bundle` (x-n8n-secret; scenes as signed URLs, captions as text, same opts as the local path — shared `renderOptsBase` helper in `render.ts`, so the two paths cannot drift) + `scripts/gh-render-batch.ts` (download → `renderFinalVideo()` → MP4 + stage-callback) + `.github/workflows/render-batch.yml` (workflow_dispatch: bundleUrl/jobId/apiBase, 4 vCPU/16 GB runner, 120-min cap, artifact kept 90 days) | GITHUB_TOKEN + GITHUB_REPO + GITHUB_WORKFLOW_ID (repo secrets) + first live dispatch; the workflow file must exist in the target repo (it does — this repo) |
-| 2 | Wan 5B at scale | `src/lib/tools/adapters/modal.ts` (shells out to the `modal` CLI; every worker takes one `--payload_json` kwarg and prints one `RESULT_JSON:` line) + `src/lib/tools/workers/modal-wan.py` (Wan2.2-TI2V-5B on A100-40GB, 16 fps, volume `toolbox-outputs`) | Modal account + `modal setup` (MODAL_TOKEN_ID/SECRET) + first live `modal run` (the Wan pipeline class is untested against a live run) |
+| 2 | Wan 5B at scale | `src/lib/tools/adapters/modal.ts` (shells out to the `modal` CLI; every worker takes one `--payload-json` kwarg and prints one `RESULT_JSON:` line) + `src/lib/tools/workers/modal-wan.py` (Wan2.2-TI2V-5B on A100-40GB, 16 fps, volume `toolbox-outputs`) | Modal account + `modal setup` (MODAL_TOKEN_ID/SECRET) + first live `modal run` (the Wan pipeline class is untested against a live run) |
 | 3 | LoRA / fine-tuning | `src/lib/tools/adapters/kaggle.ts` (push/status/output via the `kaggle` CLI; substitutes `<kaggle-username>` from env at push time) + `src/lib/tools/workers/kaggle-lora/train-lora.py` (SD 1.5 LoRA, rank 16, gradient checkpointing — fits a T4 16 GB; SDXL would OOM) + `kernel-metadata.json` (GPU enabled) | Kaggle account + API token (KAGGLE_USERNAME/KEY) + phone verification once for GPU access + training images folder + first live `kaggle kernels push` |
 | 4 | GPU upscale + background removal | `src/lib/tools/workers/modal-upscale.py` (Real-ESRGAN x2/x4 + rembg, T4, same `modal` adapter, functions `upscale` / `remove-background`) | Same Modal account as #2 |
 | 5 | Big data / Whisper ETL | `src/lib/tools/workers/modal-whisper.py` (faster-whisper `transcribe` + `transcribe_batch`) + `src/lib/tools/shard.ts` (`splitIntoShards` + `runSharded` — dispatch is sequential on purpose so quota accounting stays exact; parallelism lives on the tool side) | Same Modal account as #2 |
@@ -503,7 +503,11 @@ even when wired. Map key is now `s3-storage`, and `r2Adapter` reports
 `req.toolId` in results so a b2 run is not mislabelled as r2. Test:
 "dispatch object-storage reaches s3-storage adapter" (48/48).
 
-**What Phase 2 does NOT do (honest)**
+**What Phase 2 does NOT do (honest)** — as of 2026-11-22 this is
+superseded: Modal, Kaggle, GitHub and Cloudflare are all live (see the
+free-setup section and the Modal-live section below). The remaining
+unproven first runs are Wan 5B (A100) and Whisper (T4) — the upscale
+worker is proven live.
 - Still zero live runs: no Modal account, no Kaggle token, no GitHub
   secrets, no valid Cloudflare token — so Wan 5B, LoRA, upscale,
   Whisper, parallel renders and the Worker are all code-complete but
@@ -605,3 +609,62 @@ Still needs the user (account-only, cannot be done for them):
 - Deploy script's verify step had a stale font path (`/usr/share/fonts/TTF/DejaVuSans.ttf`); the real path is `/usr/share/fonts/dejavu/DejaVuSans.ttf` (per Dockerfile.worker CAPTION_FONT). Fixed; verify now passes and the script prints `==> DONE.`
 - The kernel pushed earlier (zaiddigital7/toolbox-lora-train) now reports status ERROR — expected, it has no training data. Real LoRA training still needs the images folder.
 - NOTE: the redeploy synced the working tree INCLUDING the main chat's uncommitted faceless-formula changes (the deploy script rsyncs the working tree as-is), so faceless-formula is live. Those changes are still uncommitted in git; the main chat owns committing them so the repo matches what's live.
+
+## Modal live 2026-11-22 (user: "modal ka setup kaise krna hai")
+
+- Token: user created a Modal account + added a card (needed for the full
+  $30/mo Starter credit; without a card it is $5/mo) and sent the token
+  by file. Token ID `ak-...` + secret `as-...` (both 25 chars) installed
+  blind into VM `.env` as MODAL_TOKEN_ID + MODAL_TOKEN_SECRET. Verified
+  live: `modal profile current` → `default`; env vars set in the app
+  container. Spend limit: Modal caps a new account at **$20** (max
+  settable budget scales with payment history) — the user set $20. That
+  is fine: the spend limit caps net charges AFTER the $30 credit, so the
+  $30 credit is used first and the $20 is only a worst-case ceiling.
+  Modal's dashboard has TWO separate settings — spend limit (net charges
+  after credits; this is the one to cap) and usage limit / workspace
+  budget (total usage before credits); both live on Usage & Billing.
+- First live worker run — **upscale, SUCCESS**: `modal run
+  modal-upscale.py::upscale --payload-json {"image_url":
+  "https://picsum.photos/seed/modal-test/200/200", "scale": 2}` →
+  `RESULT_JSON:{"output_path": "/outputs/upscaled-1795366442.png",
+  "scale": 2, "gpu_minutes": 0.11}` (200×200 → 400×400 on T4, output
+  in the `toolbox-outputs` volume). Run:
+  https://modal.com/apps/sahz7890/main/ap-TaiiLal0iLrDhpQHhGmdB8
+- Four bugs found + fixed during this first live run (all committed):
+  1. **CLI flag wrong:** the adapter + worker docs used `--payload_json`
+     (underscore); Modal CLI 1.6.4 requires `--payload-json` (hyphen).
+     Fixed in `modal.ts` (the actual dispatch call) + all three worker
+     doc comments. The worker functions' `payload_json` parameter name
+     is unchanged — only the CLI flag was wrong.
+  2. **Worker files missing from the app container:** the runner image
+     never copied `src/lib/tools/workers/`, so the adapter would fail
+     with `missing_worker`. Fixed: Dockerfile.app runner now has
+     `COPY --from=builder /app/src/lib/tools/workers
+     ./src/lib/tools/workers`; the files were also `docker cp`'d into
+     the running container for the interim test. (Same class of bug as
+     the registry file in the earlier redeploy.)
+  3. **basicsr will not build on Python 3.12+:** `realesrgan` pulls
+     `basicsr` 1.4.2, whose setup.py fails on the `debian_slim`
+     default Python. Fixed: image pinned to `python_version="3.11"`.
+  4. **Runtime import failures (two, in sequence):** first
+     `libxcb.so.1` missing (OpenCV/rembg need X11/GL system libs) —
+     fixed with `.apt_install("libxcb1", "libgl1", "libglib2.0-0")`;
+     then `torchvision.transforms.functional_tensor` missing (removed
+     in torchvision 0.17+, but basicsr 1.4.2 imports it) — fixed by
+     pinning `torch==2.0.1` + `torchvision==0.15.2`; then `Numpy is
+     not available` (torch 2.0.1 needs numpy 1.x, pip pulled numpy 2)
+     — fixed by pinning `numpy==1.26.4`.
+  5. **Test-process fragility (process, not code):** a `nohup docker
+     compose exec` test was killed mid-download when the SSH session
+     closed. Long Modal tests must run fully detached via
+     `docker exec -d ... sh -c "modal run ... > /tmp/<log> 2>&1"`
+     and be polled, never via an attached exec.
+- Registry: modal → **wired** (lastVerified 2026-11-22). Wired now 9
+  of 26 (oracle-vm, groq, gemini, nim, r2, gh-actions, cf-workers,
+  kaggle, modal). Tests 49/49, tsc 0.
+- Still unproven: **Wan 5B** (A100; pipeline class untested live) and
+  **Whisper** (T4; faster-whisper) — both need a first live `modal
+  run`. The adapter fix (`--payload-json`) is repo-only until the next
+  redeploy, so `POST /api/v1/tools/run` dispatch to Modal will not work
+  from the live VM until then.

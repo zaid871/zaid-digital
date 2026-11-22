@@ -85,6 +85,11 @@ COPY --from=builder /app/scripts/docs_bridge.py ./scripts/docs_bridge.py
 # NOT copied by the other COPYs above, so it needs its own line — without
 # it the routes serve an empty registry (caught 2026-11-22 redeploy).
 COPY --from=builder /app/storage/tool-registry.json ./storage/tool-registry.json
+# Tool workers (Modal/Kaggle Python workers + Kaggle kernel metadata):
+# the Modal/Kaggle adapters shell out to these files from
+# src/lib/tools/workers/ at runtime. Without this COPY the adapters
+# fail with missing_worker (caught 2026-11-22 Modal live test).
+COPY --from=builder /app/src/lib/tools/workers ./src/lib/tools/workers
 
 # Writable asset + temp dirs owned by the app user.
 # Everything under /app must belong to `app`: the image runs as USER app,

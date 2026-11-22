@@ -2,7 +2,7 @@
 
 Deploy/run (needs a Modal account + `modal setup`):
     modal run src/lib/tools/workers/modal-wan.py::generate \
-        --payload_json '{"prompt": "...", "image_url": "https://...", "seconds": 5}'
+        --payload-json '{"prompt": "...", "image_url": "https://...", "seconds": 5}'
 
 Payload:
     prompt (str, required) — what the clip should show

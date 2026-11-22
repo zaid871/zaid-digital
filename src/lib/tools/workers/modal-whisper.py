@@ -2,9 +2,9 @@
 
 Run (needs a Modal account + `modal setup`):
     modal run src/lib/tools/workers/modal-whisper.py::transcribe \
-        --payload_json '{"audio_url": "https://...", "model": "large-v3"}'
+        --payload-json '{"audio_url": "https://...", "model": "large-v3"}'
     modal run src/lib/tools/workers/modal-whisper.py::transcribe_batch \
-        --payload_json '{"audio_urls": ["https://...", "https://..."], "model": "base"}'
+        --payload-json '{"audio_urls": ["https://...", "https://..."], "model": "base"}'
 
 Payloads:
     transcribe: audio_url (str), model (str, default "large-v3";

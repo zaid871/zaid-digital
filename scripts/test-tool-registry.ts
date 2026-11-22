@@ -376,14 +376,14 @@ async function main(): Promise<void> {
   const real = loadRegistry();
   check("real registry loads with 0 warnings", real.warnings.length === 0, real.warnings.join(";"));
   check(
-    "real registry: modal/kaggle/cf-workers have adapters (kaggle + cf-workers wired 2026-11-22, modal still candidate)",
+    "real registry: modal/kaggle/cf-workers have adapters (all three wired 2026-11-22)",
     ["modal", "kaggle", "cf-workers"].every((id) => {
       const t = getTool(real.tools, id);
       return t !== null && t.adapter !== null;
     }) &&
       getTool(real.tools, "kaggle")?.status === "wired" &&
       getTool(real.tools, "cf-workers")?.status === "wired" &&
-      getTool(real.tools, "modal")?.status === "candidate"
+      getTool(real.tools, "modal")?.status === "wired"
   );
   check("real registry: gh-actions notes the render-batch workflow", (getTool(real.tools, "gh-actions")?.limits.renderBatch ?? "").includes("render-batch.yml"));
   process.env.TOOLS_REGISTRY_PATH = savedPath;

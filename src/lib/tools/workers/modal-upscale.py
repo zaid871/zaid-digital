@@ -2,9 +2,9 @@
 
 Run (needs a Modal account + `modal setup`):
     modal run src/lib/tools/workers/modal-upscale.py::upscale \
-        --payload_json '{"image_url": "https://...", "scale": 4}'
+        --payload-json '{"image_url": "https://...", "scale": 4}'
     modal run src/lib/tools/workers/modal-upscale.py::remove_background \
-        --payload_json '{"image_url": "https://..."}'
+        --payload-json '{"image_url": "https://..."}'
 
 Payloads:
     upscale: image_url (str), scale (int, 2 or 4, default 4)
@@ -28,8 +28,28 @@ import urllib.request
 import modal
 
 app = modal.App("toolbox-upscale")
-image = modal.Image.debian_slim().pip_install(
-    "torch", "realesrgan", "rembg[gpu]", "pillow", "numpy", "opencv-python-headless"
+# Python 3.11 pinned: realesrgan pulls basicsr, whose setup.py cannot
+# build a wheel on 3.12+ (debian_slim default) — the image build dies
+# with "Failed to build 'basicsr'" (caught 2026-11-22 Modal live test).
+image = (
+    modal.Image.debian_slim(python_version="3.11")
+    # System libs OpenCV/rembg need at runtime: libxcb (libxcb.so.1),
+    # libGL (libGL.so.1), glib. Without them the worker dies on import
+    # with "libxcb.so.1: cannot open shared object file" (caught
+    # 2026-11-22 Modal live test — the image built fine, the run failed).
+    .apt_install("libxcb1", "libgl1", "libglib2.0-0")
+    # torch/torchvision pinned: basicsr 1.4.2 (a realesrgan dep) imports
+    # torchvision.transforms.functional_tensor, which was REMOVED in
+    # torchvision 0.17+ — with latest torch the worker dies on import
+    # with "No module named 'torchvision.transforms.functional_tensor'"
+    # (caught 2026-11-22 Modal live test). torch 2.0.1 + torchvision
+    # 0.15.2 is the pair basicsr 1.4.2 was built against.
+    .pip_install(
+        # numpy pinned <2: torch 2.0.1 was built against numpy 1.x, and
+        # numpy 2.x breaks it at runtime ("Numpy is not available")
+        # (caught 2026-11-22 Modal live test).
+        "torch==2.0.1", "torchvision==0.15.2", "numpy==1.26.4", "realesrgan", "rembg[gpu]", "pillow", "opencv-python-headless"
+    )
 )
 volume = modal.Volume.from_name("toolbox-outputs", create_if_missing=True)
 
