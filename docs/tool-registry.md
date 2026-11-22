@@ -752,3 +752,17 @@ HF token (already installed), a **Brevo API key** (`xkeysib-`, 89 chars) and a
   (`/v3/senders` → 403), so `BREVO_SENDER_EMAIL` must come from the user
   (the verified sender in their Brevo account). Registry: brevo stays
   **candidate**.
+
+**Brevo — sender email set, send test FAILED (2026-11-23).**
+- `BREVO_SENDER_EMAIL=sahz7890@gmail.com` + `BREVO_API_KEY` installed into
+  `~/n8n/.env`; n8n container (`n8n-n8n-1`, separate compose project) restarted
+  via `docker restart` (the product-video-platform compose has no n8n service
+  — `docker compose restart n8n` there does nothing). n8n health ok.
+- Live send test from VM → **403 `permission_denied` for resource
+  "transactional.email"** — the key does NOT carry the Transactional email
+  scope. The user must edit the key in Brevo dashboard and enable
+  **Transactional email → Read/write** (and confirm Contacts → Read/write).
+- IP restriction STILL active: Contacts endpoints return **401 "unrecognised
+  IP address 158.180.19.153"** — the VM IP is still not in Brevo Security →
+  Authorized IPs. Both fixes (IP allowlist + Transactional scope) are needed
+  before any send works.
