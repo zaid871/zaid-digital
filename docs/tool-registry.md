@@ -546,9 +546,17 @@ stays user-only. What was done without the user:
   GitHub email differs).
 
 Still needs the user (account-only, cannot be done for them):
-- Kaggle: create account → verify phone once (GPU gate) → Settings →
-  API → Create New Token → send the `kaggle.json` file (file method).
-  Training images: a folder of 20–100 same-style product shots.
+- Kaggle: DONE 2026-11-22 — account zaiddigital7 (created by the user, login verified via device browser).
+  Token is the NEW KGAT format (37 chars, starts KGAT) — verified live first (Kaggle API Bearer auth →
+  200, 20 competitions listed). IMPORTANT: the KGAT token does NOT work as a classic kaggle.json key —
+  the CLI rejects it as basic auth ("Authentication required"); it works only via the KAGGLE_API_TOKEN
+  env var (bearer). CLI 2.2.5 tested on the VM (needed `six` installed — the kaggle package omits it).
+  Kernel pushed live: zaiddigital7/toolbox-lora-train (v1, private) — `kaggle kernels push` → rc 0, status
+  RUNNING (GPU access active). VM .env: KAGGLE_USERNAME=zaiddigital7 + KAGGLE_KEY + KAGGLE_API_TOKEN
+  (all three set; the adapter checks USERNAME+KEY, the CLI authenticates via API_TOKEN). App+worker
+  restarted, health ok:true. Registry kaggle → wired. NOTE: the running kernel will fail on missing
+  training data (no dataset attached) — expected; real training still needs the images folder (20–100
+  same-style product shots). Temp files deleted (VM /tmp/keys-kaggle.txt + /tmp/kaggle-kernel + /tmp/kagvenv).
 - GitHub: DONE 2026-11-22 — repo https://github.com/zaid871/zaid-digital (public, empty, created via the
   user's own Chrome; username zaid871, login verified). PAT verified live first (classic ghp_ 40 chars,
   GET /user → 200, login zaid871, scopes repo+workflow, expires 2027-02-20). Pushed main (2 commits:
