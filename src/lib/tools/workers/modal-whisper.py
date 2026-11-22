@@ -33,7 +33,27 @@ import urllib.request
 import modal
 
 app = modal.App("toolbox-whisper")
-image = modal.Image.debian_slim().pip_install("faster-whisper")
+# av pinned: faster-whisper calls av.open(..., metadata_errors=...),
+# but av 19.x removed that parameter (TypeError on open) — caught
+# 2026-11-22 Whisper live test. av 13.1.0 still accepts it, but it
+# ships no prebuilt cp312 wheel, so pip builds PyAV from source —
+# that needs pkg-config + the FFmpeg dev libraries (av 12.3.0 and
+# 13.1.0 both died on "pkg-config is required for building PyAV").
+image = (
+    # CUDA base image: debian_slim has no CUDA runtime libs, and the
+    # nvidia-cublas-cu12 pip package's libs are not on ctranslate2's
+    # search path (test4/5/6 all died with "libcublas.so.12 is not
+    # found"). The nvidia/cuda runtime image ships libcublas in the
+    # system library path, so faster-whisper finds it. (Caught
+    # 2026-11-22 Whisper live test.)
+    modal.Image.from_registry("nvidia/cuda:12.4.1-runtime-ubuntu22.04", add_python="3.12")
+    .apt_install(
+        "pkg-config",
+        "libavformat-dev", "libavcodec-dev", "libavdevice-dev",
+        "libavutil-dev", "libswscale-dev", "libswresample-dev", "libavfilter-dev",
+    )
+    .pip_install("faster-whisper", "av==13.1.0")
+)
 volume = modal.Volume.from_name("toolbox-outputs", create_if_missing=True)
 
 

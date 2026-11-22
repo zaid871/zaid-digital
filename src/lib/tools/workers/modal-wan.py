@@ -21,8 +21,10 @@ Costs ~9 GPU-min per 5 s 720p clip (measured pattern: Wan 5B needs
 ZeroGPU Space or a Kaggle T4).
 
 NOT live-tested: no Modal account exists yet. The first `modal run`
-is the validation — if diffusers renamed the Wan pipeline class, the
-error will say so and the fix is a one-line class swap.
+is the validation — the worker picks the pipeline class by input:
+WanPipeline for text-only, WanImageToVideoPipeline when a first-frame
+image is supplied (the TI2V-5B model needs both; each class rejects
+the other's calling convention).
 """
 
 import io
@@ -48,7 +50,6 @@ def _download(url: str) -> bytes:
 @app.function(image=image, gpu="A100-40GB", timeout=1800, volumes={"/outputs": volume})
 def generate(payload_json: str) -> None:
     import torch
-    from diffusers import WanPipeline
     from PIL import Image
 
     t0 = time.time()
@@ -61,9 +62,24 @@ def generate(payload_json: str) -> None:
     image_url = payload.get("image_url")
     negative = payload.get("negative_prompt", "")
 
-    pipe = WanPipeline.from_pretrained(
-        "Wan-AI/Wan2.2-TI2V-5B-Diffusers", torch_dtype=torch.bfloat16
-    )
+    # TI2V-5B takes two pipeline classes (caught 2026-11-22 Wan live
+    # test): WanPipeline is T2V-only and rejects `image`, while
+    # WanImageToVideoPipeline REQUIRES `image` (missing it raises
+    # "missing 1 required positional argument: 'image'"). So pick the
+    # class by whether a first-frame image was supplied — both load
+    # the same TI2V-5B weights.
+    if image_url:
+        from diffusers import WanImageToVideoPipeline
+
+        pipe = WanImageToVideoPipeline.from_pretrained(
+            "Wan-AI/Wan2.2-TI2V-5B-Diffusers", torch_dtype=torch.bfloat16
+        )
+    else:
+        from diffusers import WanPipeline
+
+        pipe = WanPipeline.from_pretrained(
+            "Wan-AI/Wan2.2-TI2V-5B-Diffusers", torch_dtype=torch.bfloat16
+        )
     pipe.to("cuda")
 
     image = None
@@ -72,16 +88,18 @@ def generate(payload_json: str) -> None:
 
     generator = torch.Generator(device="cuda").manual_seed(int(seed)) if seed else None
     # Wan 2.2 generates at 16 fps; frames = seconds * 16 + 1.
-    result = pipe(
+    call_kwargs = dict(
         prompt=prompt,
         negative_prompt=negative,
-        image=image,
         height=height,
         width=width,
         num_frames=seconds * 16 + 1,
         guidance_scale=5.0,
         generator=generator,
     )
+    if image is not None:
+        call_kwargs["image"] = image
+    result = pipe(**call_kwargs)
     frames = result.frames[0]
 
     import imageio

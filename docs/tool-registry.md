@@ -663,11 +663,53 @@ Still needs the user (account-only, cannot be done for them):
 - Registry: modal → **wired** (lastVerified 2026-11-22). Wired now 9
   of 26 (oracle-vm, groq, gemini, nim, r2, gh-actions, cf-workers,
   kaggle, modal). Tests 49/49, tsc 0.
-- Still unproven: **Wan 5B** (A100; pipeline class untested live) and
-  **Whisper** (T4; faster-whisper) — both need a first live `modal
-  run`. The adapter fix (`--payload-json`) is repo-only until the next
-  redeploy, so `POST /api/v1/tools/run` dispatch to Modal will not work
-  from the live VM until then.
+- **Wan 5B + Whisper first live runs — BOTH SUCCESS (2026-11-22 ~23:0x IST,
+  user: "haan test kr do"):**
+  - **Wan 5B, SUCCESS:** `modal run modal-wan.py::generate
+    --payload-json {"prompt": "A premium black wireless keyboard on a
+    dark desk, cinematic product shot, slow camera push-in", "seconds": 2}`
+    → `RESULT_JSON:{"output_path": "/outputs/wan-1795368267.mp4",
+    "duration_sec": 2, "frames": 33, "gpu_minutes": 4.7}` (A100-40GB,
+    2 s clip, 33 frames = 2*16+1). Output in `toolbox-outputs` volume
+    (confirmed via `modal volume ls`). Two bugs found + fixed:
+    (a) **Wrong pipeline class:** the worker used `WanPipeline`, which
+    is T2V-only and rejects `image` (TypeError). The TI2V-5B model
+    loads through `WanImageToVideoPipeline` — but that class REQUIRES
+    `image` (missing it raises "missing 1 required positional
+    argument: 'image'"). Fix: pick the class by input — `WanPipeline`
+    for text-only, `WanImageToVideoPipeline` when a first-frame image
+    is supplied; both load the same TI2V-5B weights. (b) **HF Hub
+    unauthenticated warning** (no HF_TOKEN in the Modal env) — only a
+    rate-limit warning, downloads still worked.
+  - **Whisper, SUCCESS:** `modal run modal-whisper.py::transcribe
+    --payload-json {"audio_url": "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3",
+    "model": "tiny"}` → `RESULT_JSON:{"text": "Yeah", "segments":
+    [{"start": 0.0, "end": 2.0, "text": " Yeah"}], "language": "en",
+    "gpu_minutes": 0.09}` (T4; the roar is not speech, so the text is
+    minimal — expected). Run:
+    https://modal.com/apps/sahz7890/main/ap-KjCTT38h89t8juVcdhIG1e.
+    Four bugs found + fixed: (a) **av 19.x removed `metadata_errors`:**
+    faster-whisper calls `av.open(..., metadata_errors=...)` but av
+    19.0.2 dropped that parameter (TypeError on open). Fix: pin
+    `av==13.1.0` (still accepts it). (b) **av 12.3.0/13.1.0 ship no
+    prebuilt cp312 wheel:** pip fell back to building PyAV from source
+    and died on "pkg-config is required for building PyAV". Fix: the
+    image now `apt_install`s pkg-config + the FFmpeg dev libraries
+    (libavformat/codec/device/util, libswscale, libswresample,
+    libavfilter) so PyAV compiles. (c) **libcublas.so.12 missing:**
+    ctranslate2 needs the CUDA 12 runtime libs; debian_slim has none,
+    and the `nvidia-cublas-cu12` pip package's libs are not on
+    ctranslate2's search path (tests 4/5/6 all died on it). Fix: the
+    image is now `modal.Image.from_registry("nvidia/cuda:12.4.1-runtime-ubuntu22.04",
+    add_python="3.12")`, which ships libcublas in the system library
+    path. (d) **Wikimedia 429:** the first test audio (Wikimedia
+    Example.ogg) was rate-limited (HTTP 429) at download; switched to
+    the MDN t-rex-roar.mp3 sample.
+  - All 6 tasks now have at least one live run: task 2 (Wan) ✓, task 4
+    (upscale) ✓, task 5 (Whisper) ✓. Remaining unproven: a real
+    image-to-video Wan run (with an actual product image), a real
+    speech transcription (with real speech audio), and the
+    transcribe_batch / LoRA real-training paths.
 - **Redeploy 2026-11-22 ~22:40 IST (DOMAIN=zaid-digital.duckdns.org):**
   carried the adapter fix + the workers COPY into the image. Verified
   live after: workers baked into the image (`/app/src/lib/tools/workers/`
