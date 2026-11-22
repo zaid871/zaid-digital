@@ -722,3 +722,33 @@ Still needs the user (account-only, cannot be done for them):
   reaches modal; the route test used capability `gpu-video` (only modal
   offers it) to reach the modal adapter. Wan/Whisper first live runs
   still pending.
+
+## Brevo + Resend keys (2026-11-23)
+
+User sent a file (`hugging_face_token.txt`, re-used name) holding three keys:
+HF token (already installed), a **Brevo API key** (`xkeysib-`, 89 chars) and a
+**Resend API key** (`re_`, 36 chars).
+
+**Resend — key installed + verified, sending still blocked.**
+- Key verified live: Resend recognises it as a valid **Sending access** key
+  (the `/domains` call returns 401 "restricted to only send emails" — that is
+  the expected answer for a sending-only key, i.e. the correct permission).
+- Installed into VM backend `.env` (`RESEND_API_KEY`), app+worker restarted,
+  health `ok:true`. Registry: resend stays **candidate** — it cannot send
+  until a domain is verified in Resend (no owned domain yet).
+- Gotcha: Resend's API sits behind Cloudflare; plain Python-urllib calls get
+  403 error 1010 (Browser Integrity Check). Use a browser User-Agent.
+
+**Brevo — key valid, BLOCKED by IP restriction.**
+- Key format valid (`xkeysib-`, 89 chars). From the VM the `/v3/account`
+  call returns 403 `permission_denied` — expected for a Restricted key
+  (account/senders scopes not granted; only Transactional + Contacts).
+- But the Contacts endpoint returns **401 "unrecognised IP address
+  158.180.19.153"** — the key has IP restriction enabled and the VM's IP is
+  NOT on the allowlist. So n8n (which runs on the VM) cannot use the key
+  until the user adds `158.180.19.153` in Brevo dashboard → Security →
+  Authorized IPs (or removes the IP restriction).
+- Sender email still needed: the Restricted key cannot list senders
+  (`/v3/senders` → 403), so `BREVO_SENDER_EMAIL` must come from the user
+  (the verified sender in their Brevo account). Registry: brevo stays
+  **candidate**.
