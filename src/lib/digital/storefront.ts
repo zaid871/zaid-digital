@@ -76,6 +76,54 @@ const CATEGORY_BY_TYPE: Record<string, CategoryDef> = {
   website_template: { slug: "website-templates", label: "Website Templates" },
 };
 
+/** SEO + header copy per store category, keyed by category slug.
+ * Used by /store/<category> for <title>, meta description and the
+ * page header. A category listed here renders even with zero
+ * products (no 404); categories not listed here fall back to their
+ * catalog label and 404 while they have zero products. */
+export interface CategoryMeta {
+  label: string;
+  title: string;
+  description: string;
+  blurb: string;
+}
+
+export const CATEGORY_META: Record<string, CategoryMeta> = {
+  ebooks: {
+    label: "Ebooks",
+    title: "Ebooks",
+    description:
+      "Classic books and ebooks in digital editions. Timeless reads, instant download — new ebooks every week.",
+    blurb: "Classic books aur ebooks — timeless reads, digital editions.",
+  },
+  templates: {
+    label: "Templates",
+    title: "Templates",
+    description:
+      "Premium templates and digital designs. Website templates, planners and more — instant download, ready to use.",
+    blurb: "Premium templates aur digital designs — instant download, ready to use.",
+  },
+  spreadsheets: {
+    label: "Spreadsheets",
+    title: "Spreadsheets",
+    description:
+      "Budget spreadsheets and finance trackers. Plan, save and track your money with easy Excel and Google Sheets templates.",
+    blurb: "Budget spreadsheets aur finance trackers — apne paise ko plan aur track karein.",
+  },
+  pod: {
+    label: "Print on Demand",
+    title: "Print on Demand",
+    description:
+      "Custom printed products — T-shirts, templates, shoes and more. Unique designs at budget prices.",
+    blurb: "Custom printed products — T-shirts, templates, shoes aur bhi bahut kuch.",
+  },
+};
+
+/** SEO copy for a category slug, or null when the category has none. */
+export function categoryMeta(slug: string): CategoryMeta | null {
+  return CATEGORY_META[slug] ?? null;
+}
+
 /** Display order of categories on the store home page. */
 const CATEGORY_ORDER = [
   "ebooks",
@@ -280,4 +328,31 @@ export async function getStoreProduct(category: string, id: string): Promise<Sto
 /** All known category slugs (for route validation). */
 export function knownCategorySlugs(): string[] {
   return [...new Set(Object.values(CATEGORY_BY_TYPE).map((c) => c.slug)), "other"];
+}
+
+/**
+ * Raw manifest JSON for one product dir, or null. Used by the ebook
+ * landing page, which needs fields the StorefrontProduct card does not
+ * carry (estimatedPrice, chapters). Does NOT apply the hidden filter —
+ * callers check that themselves.
+ */
+export async function readRawManifest(id: string): Promise<Record<string, unknown> | null> {
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(id)) return null;
+  let raw: string;
+  try {
+    raw = await readFile(join(digitalRoot(), id, "manifest.json"), "utf-8");
+  } catch {
+    return null;
+  }
+  try {
+    const m = JSON.parse(raw) as Record<string, unknown>;
+    return m && typeof m === "object" ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when a product dir is hidden from the public store. */
+export async function isStoreProductHidden(id: string): Promise<boolean> {
+  return (await readHiddenIds()).has(id);
 }
