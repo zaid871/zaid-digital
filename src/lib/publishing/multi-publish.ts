@@ -25,7 +25,7 @@ import {
 } from "./platform-fit";
 import { createImagePin } from "./pinterest";
 import { createTextPost } from "./linkedin";
-import { createThreadsPost } from "./threads";
+import { createThreadsPost, resolveThreadsCredentials } from "./threads";
 import { buildQuoraAnswer, buildRedditDraft, buildXThread } from "./intent-drafts";
 import { SocialPublishError, type SocialProduct } from "./social-copy";
 
@@ -82,7 +82,14 @@ export async function multiPublish(
         results.push({ platform, status: "published", fit: fit?.fit, id: postId });
       } else if (platform === "threads") {
         // API lane — Threads has a free official API (container-then-publish).
-        const { postId } = await createThreadsPost(product, { fetchFn: opts?.fetchFn });
+        // Per-profile routing: the product's account posts from its own
+        // Threads profile when it has one, else the default (tech_fynd).
+        const threadsCreds = resolveThreadsCredentials(product.category);
+        const { postId } = await createThreadsPost(product, {
+          token: threadsCreds.token,
+          threadsUserId: threadsCreds.threadsUserId,
+          fetchFn: opts?.fetchFn,
+        });
         results.push({ platform, status: "published", fit: fit?.fit, id: postId });
       } else if (platform === "quora") {
         // Manual lane — Quora has no API. Draft only, never posted.

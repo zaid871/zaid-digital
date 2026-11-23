@@ -7,6 +7,7 @@
 import {
   buildThreadsCopy,
   createThreadsPost,
+  resolveThreadsCredentials,
   THREADS_TEXT_MAX,
 } from "../src/lib/publishing/threads";
 import { SocialPublishError } from "../src/lib/publishing/social-copy";
@@ -191,6 +192,47 @@ async function main() {
     } catch (e) {
       check("fail: publish with no id → submit_failed", e instanceof SocialPublishError && e.code === "submit_failed");
     }
+  }
+
+  // --- resolveThreadsCredentials: per-profile routing + default fallback ---
+  {
+    const env = {
+      ACCOUNTS_JSON: JSON.stringify([
+        { key: "tech", label: "Tech Finds", kind: "affiliate", niches: ["tech"], igUserId: "ig-tech", fbPageId: "fb-tech", threadsTokenEnv: "THREADS_ACCESS_TOKEN", threadsUserId: "th-tech" },
+        { key: "ebooks", label: "Classic Books", kind: "digital", productTypes: ["ebook", "coloring_book"], igUserId: "ig-ebooks", fbPageId: "fb-ebooks", threadsUserId: "th-ebooks" },
+        { key: "templates", label: "Crafted Pixels", kind: "digital", productTypes: ["template_pack", "website"], igUserId: "ig-templates", fbPageId: "fb-templates", threadsUserId: "th-templates" },
+        { key: "spreadsheets", label: "Clear Budget Sheet", kind: "digital", productTypes: ["xlsx"], igUserId: "ig-sheets", fbPageId: "fb-sheets", threadsUserId: "th-sheets" },
+        { key: "pod", label: "Printed Tshirts", kind: "digital", productTypes: ["pod", "pod_design"], igUserId: "ig-pod", fbPageId: "fb-pod" },
+      ]),
+      THREADS_ACCESS_TOKEN: "tok-default",
+      THREADS_USER_ID: "th-tech",
+      THREADS_ACCESS_TOKEN_EBOOKS: "tok-ebooks",
+      THREADS_ACCESS_TOKEN_TEMPLATES: "tok-templates",
+      THREADS_ACCESS_TOKEN_SPREADSHEETS: "tok-sheets",
+    };
+    const r1 = resolveThreadsCredentials("ebook", env);
+    check("route: ebook -> ebooks profile", r1.token === "tok-ebooks" && r1.threadsUserId === "th-ebooks");
+    const r2 = resolveThreadsCredentials("template_pack", env);
+    check("route: template_pack -> templates profile", r2.token === "tok-templates" && r2.threadsUserId === "th-templates");
+    const r3 = resolveThreadsCredentials("xlsx", env);
+    check("route: xlsx -> spreadsheets profile", r3.token === "tok-sheets" && r3.threadsUserId === "th-sheets");
+    const r4 = resolveThreadsCredentials("affiliate", env);
+    check("route: affiliate -> default (tech) profile", r4.token === "tok-default" && r4.threadsUserId === "th-tech");
+    const r5 = resolveThreadsCredentials("pod", env);
+    check("route: pod (no Threads profile) -> default", r5.token === "tok-default" && r5.threadsUserId === "th-tech");
+    // Account without Threads fields falls back to default, never throws.
+    const envNoThreads = {
+      ACCOUNTS_JSON: JSON.stringify([
+        { key: "ebooks", label: "Classic Books", kind: "digital", productTypes: ["ebook"], igUserId: "ig-ebooks", fbPageId: "fb-ebooks" },
+      ]),
+      THREADS_ACCESS_TOKEN: "tok-default",
+      THREADS_USER_ID: "th-tech",
+    };
+    const r6 = resolveThreadsCredentials("ebook", envNoThreads);
+    check("route: account without Threads fields -> default", r6.token === "tok-default" && r6.threadsUserId === "th-tech");
+    // Nothing configured anywhere -> empty (createThreadsPost throws notConfigured).
+    const r7 = resolveThreadsCredentials("ebook", {});
+    check("route: nothing configured -> empty", r7.token === "" && r7.threadsUserId === "");
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

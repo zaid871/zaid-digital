@@ -21,10 +21,43 @@ import {
   SocialPublishError,
   type SocialProduct,
 } from "./social-copy";
+import { accountKeyForProduct, loadAccounts } from "./accounts";
 
 const THREADS_BASE = "https://graph.threads.net";
 /** Threads caps text at 500 characters (emojis count as UTF-8 bytes). */
 export const THREADS_TEXT_MAX = 500;
+
+/**
+ * Which Threads profile posts this product type? Resolves the account
+ * for the product (same routing as IG/FB), then reads that account's
+ * Threads token (env var from its threadsTokenEnv, default
+ * THREADS_ACCESS_TOKEN_<KEY>) and threadsUserId. Falls back to the
+ * default env vars (THREADS_ACCESS_TOKEN / THREADS_USER_ID = tech_fynd)
+ * when the account has no Threads credentials — so products whose
+ * account lacks a Threads token still post from the default profile
+ * instead of failing. Returns empty strings when nothing is configured
+ * anywhere; createThreadsPost then throws notConfigured honestly.
+ */
+export function resolveThreadsCredentials(
+  productType?: string,
+  env: Record<string, string | undefined> = process.env
+): { token: string; threadsUserId: string } {
+  const fallback = {
+    token: (env.THREADS_ACCESS_TOKEN ?? "").trim(),
+    threadsUserId: (env.THREADS_USER_ID ?? "").trim(),
+  };
+  const accounts = loadAccounts(env);
+  if (accounts.length === 0) return fallback;
+  const key = accountKeyForProduct(accounts, productType);
+  if (!key) return fallback;
+  const account = accounts.find((a) => a.key === key);
+  if (!account?.threadsUserId) return fallback;
+  const tokenEnv =
+    account.threadsTokenEnv ?? `THREADS_ACCESS_TOKEN_${key.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+  const token = (env[tokenEnv] ?? "").trim();
+  if (!token) return fallback;
+  return { token, threadsUserId: account.threadsUserId };
+}
 
 function firstSentence(text: string): string {
   const m = text.trim().match(/^[^.!?]+[.!?]/);

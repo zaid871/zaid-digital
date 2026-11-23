@@ -37,6 +37,11 @@ export interface SocialAccount {
   igTokenEnv?: string;
   /** Env var holding this account's FB Page token (default FB_PAGE_TOKEN_<KEY>). */
   fbTokenEnv?: string;
+  /** Env var holding this account's Threads token (default THREADS_ACCESS_TOKEN_<KEY>).
+   *  The tech_fynd default account uses the bare THREADS_ACCESS_TOKEN var instead. */
+  threadsTokenEnv?: string;
+  /** This account's Threads user id (from the OAuth /me call). No token without it. */
+  threadsUserId?: string;
 }
 
 export interface ResolvedAccount {
@@ -95,6 +100,8 @@ function parseAccount(raw: unknown): SocialAccount | null {
     fbPageId,
     igTokenEnv: asNonEmptyString(m.igTokenEnv) ?? undefined,
     fbTokenEnv: asNonEmptyString(m.fbTokenEnv) ?? undefined,
+    threadsTokenEnv: asNonEmptyString(m.threadsTokenEnv) ?? undefined,
+    threadsUserId: asNonEmptyString(m.threadsUserId) ?? undefined,
   };
 }
 
